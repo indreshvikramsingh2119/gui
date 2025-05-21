@@ -9,6 +9,7 @@ from PyQt5.QtCore import Qt, QEvent
 from PyQt5.QtGui import QFont
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 
 
 class HoverLabel(QWidget):
@@ -53,17 +54,21 @@ class HoverLabel(QWidget):
 
 class SleepSensePlot(QMainWindow):
     def __init__(self):
-        super().__init__()
+        super().__init__()   
         self.setWindowTitle("Developer Mode - Sleepsense Plotting")
 
         # Load data
-        file_path = r"C:\Users\DELL\Documents\Workday1\sleepsense\DATA1623.TXT"
+        file_path = r"C:\Users\DELL\Downloads\testing_breath_2\DATA1623.TXT"
         self.data = pd.read_csv(file_path, header=None)
         self.time = self.data[0].astype(float) / 1000  # ms to seconds
         self.body_pos = self.data[1].astype(int)
         self.pulse = self.data[2].astype(float)
         self.spo2 = self.data[3].astype(float)
         self.flow = self.data[7].astype(float)
+        
+        # OSA, CSA, HSA total count
+        self.csa_count, self.osa_count, self.hsa_count = self.detect_apneas()
+        print(f"CSA: {self.csa_count}, OSA: {self.osa_count}, HSA: {self.hsa_count}")
 
         # Normalize
         self.body_pos_n = self.normalize(self.body_pos)
@@ -172,12 +177,18 @@ class SleepSensePlot(QMainWindow):
         yticks = [np.mean(sig) + off for sig, off in zip([body_pos, pulse, spo2, flow], offset)]
         self.ax.set_yticks(yticks)
         self.ax.set_yticklabels(['Body Position', 'Pulse', 'SpO2', 'Airflow'])
+        
+        custom_legend = [
+            Line2D([0], [0], color="purple", linestyle='None', markersize=8, label=f"CSA {self.csa_count}"),
+            Line2D([0], [0], color="teal", linestyle='None', markersize=8, label=f"OSA {self.osa_count}"),
+            Line2D([0], [0], color="darkgreen", linestyle='None', markersize=8, label=f"HSA {self.hsa_count}"),
+        ]
+        self.ax.legend(handles=custom_legend, loc="upper right")
 
         self.ax.set_xlim(t0, t1)
         self.ax.set_ylim(-0.5, 5)
         self.ax.set_title("Sleepsense Signal Viewer")
         self.ax.grid(True, linestyle='--', alpha=0.5)
-        self.ax.legend(loc="upper right")
         self.canvas.draw()
 
     def update_plot(self, value):
@@ -197,6 +208,44 @@ class SleepSensePlot(QMainWindow):
         max_slider = int((self.end_time - self.start_time - self.window_size) * 10)
         self.slider.setMaximum(max_slider)
         self.update_plot(self.slider.value())
+        
+    def detect_apneas(self):
+        # use pulse as breaths_per_min
+        btp = self.pulse.values
+        max_btp = btp.max()
+        min_btp = btp.min()
+
+        csa_thresh = int(0.10 * max_btp + min_btp)
+        osa_thresh = int(0.50 * max_btp + min_btp)
+        hsa_thresh = int(0.80 * max_btp + min_btp)
+
+        csa_count = osa_count = hsa_count = 0
+
+        # find runs of constant BTP > 2 samples
+        runs = []
+        run_val = btp[0]
+        run_len = 1
+        for v in btp[1:]:
+            if v == run_val:
+                run_len += 1
+            else:
+                if run_len > 2:
+                    runs.append((run_val, run_len))
+                run_val = v
+                run_len = 1
+        if run_len > 2:
+            runs.append((run_val, run_len))
+
+        # classify each run
+        for val, length in runs:
+            if length >= 10 and min_btp < val <= csa_thresh:
+                csa_count += 1
+            elif csa_thresh < val <= osa_thresh:
+                osa_count += 1
+            elif osa_thresh < val <= hsa_thresh:
+                hsa_count += 1
+
+        return csa_count, osa_count, hsa_count
 
 
 if __name__ == "__main__":
