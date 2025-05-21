@@ -64,7 +64,6 @@ class SleepSensePlot(QMainWindow):
         self.pulse = self.data[2].astype(float)
         self.spo2 = self.data[3].astype(float)
         self.flow = self.data[7].astype(float)
-        self.flow = self.data[8].astype(float)
 
         # Normalize
         self.body_pos_n = self.normalize(self.body_pos)
@@ -134,14 +133,14 @@ class SleepSensePlot(QMainWindow):
         return (series - series.min()) / (series.max() - series.min())
 
     def get_body_arrow(self, value):
-        if value == 0:
-            return "▲"  # Supine
-        elif value == 1:
-            return "◀"  # Left
+        if value == 1:
+            return "▲"  # Up
         elif value == 2:
-            return "▶"  # Right
+            return "▼"  # Down
         elif value == 3:
-            return "▼"  # Prone
+            return "◀"  # Left
+        elif value == 4:
+            return "▶"  # Right
         else:
             return "?"  # Unknown
 
@@ -162,7 +161,8 @@ class SleepSensePlot(QMainWindow):
         self.ax.plot(t, body_pos + offset[0], label="Body Position", color="black", linestyle='', marker='o')
         for ti, bi in zip(t, self.body_pos[mask]):
             symbol = self.get_body_arrow(bi)
-            self.ax.text(ti, offset[0], symbol, fontsize=10, ha='center', va='bottom')
+            y_offset = offset[0] + 0.1  # Add vertical offset for better visibility
+            self.ax.text(ti, y_offset, symbol, fontsize=12, ha='center', va='center', color='blue')
 
         # Plot other signals
         self.ax.plot(t, pulse + offset[1], label="Pulse", color="red")
