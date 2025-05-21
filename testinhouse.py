@@ -139,13 +139,13 @@ class SleepSensePlot(QMainWindow):
 
     def get_body_arrow(self, value):
         if value == 1:
-            return "▲"  # Supine
+            return "▲"  # Up
         elif value == 2:
-            return "◀"  # Left
+            return "▼"  # Down
         elif value == 3:
+            return "◀"  # Left
+        elif value == 4:
             return "▶"  # Right
-        elif value == 5:
-            return "▼"  # Prone
         else:
             return "?"  # Unknown
 
@@ -166,7 +166,8 @@ class SleepSensePlot(QMainWindow):
         self.ax.plot(t, body_pos + offset[0], label="Body Position", color="black", linestyle='', marker='o')
         for ti, bi in zip(t, self.body_pos[mask]):
             symbol = self.get_body_arrow(bi)
-            self.ax.text(ti, offset[0], symbol, fontsize=10, ha='center', va='bottom')
+            y_offset = offset[0] + 0.1  # Add vertical offset for better visibility
+            self.ax.text(ti, y_offset, symbol, fontsize=12, ha='center', va='center', color='blue')
 
         # Plot other signals
         self.ax.plot(t, pulse + offset[1], label="Pulse", color="red")
