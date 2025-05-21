@@ -1,4 +1,5 @@
 import sys
+import os
 import pandas as pd
 import numpy as np
 from PyQt5.QtWidgets import (
@@ -10,6 +11,9 @@ from PyQt5.QtGui import QFont
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+import matplotlib.image as mpimg
+import matplotlib.patches as patches
 
 
 class HoverLabel(QWidget):
@@ -54,23 +58,22 @@ class HoverLabel(QWidget):
 
 class SleepSensePlot(QMainWindow):
     def __init__(self):
-        super().__init__()   
+        super().__init__()
         self.setWindowTitle("Developer Mode - Sleepsense Plotting")
 
         # Load data
-        file_path = r"C:\Users\DELL\Downloads\testing_breath_2\DATA1623.TXT"
+        file_path = r"DATA2304.TXT"
         self.data = pd.read_csv(file_path, header=None)
         self.time = self.data[0].astype(float) / 1000  # ms to seconds
         self.body_pos = self.data[1].astype(int)
         self.pulse = self.data[2].astype(float)
         self.spo2 = self.data[3].astype(float)
         self.flow = self.data[7].astype(float)
-        
+
         # OSA, CSA, HSA total count
         self.csa_count, self.osa_count, self.hsa_count = self.detect_apneas()
-        print(f"CSA: {self.csa_count}, OSA: {self.osa_count}, HSA: {self.hsa_count}")
 
-        # Normalize
+        # Normalize signals
         self.body_pos_n = self.normalize(self.body_pos)
         self.pulse_n = self.normalize(self.pulse)
         self.spo2_n = self.normalize(self.spo2)
@@ -94,7 +97,7 @@ class SleepSensePlot(QMainWindow):
 
         # Timeframe buttons on top
         timeframe_layout = QHBoxLayout()
-        for label, sec in [("5s", 5), ("10s", 10), ("30s", 30), ("1m", 60), ("5m", 300)]:
+        for label, sec in [("5s", 5), ("10s", 10), ("30s", 30), ("1m", 60), ("2m", 120)]:
             btn = QPushButton(label)
             btn.clicked.connect(lambda _, s=sec: self.set_window_size(s))
             timeframe_layout.addWidget(btn)
@@ -137,18 +140,6 @@ class SleepSensePlot(QMainWindow):
     def normalize(self, series):
         return (series - series.min()) / (series.max() - series.min())
 
-    def get_body_arrow(self, value):
-        if value == 1:
-            return "▲"  # Up
-        elif value == 2:
-            return "▼"  # Down
-        elif value == 3:
-            return "◀"  # Left
-        elif value == 4:
-            return "▶"  # Right
-        else:
-            return "?"  # Unknown
-
     def plot_signals(self):
         self.ax.clear()
         t0 = self.window_start
@@ -162,14 +153,42 @@ class SleepSensePlot(QMainWindow):
         spo2 = self.spo2_n[mask] * self.scales['SpO2']
         flow = self.flow_n[mask] * self.scales['Airflow']
 
-        # Plot body position as points + arrows
-        self.ax.plot(t, body_pos + offset[0], label="Body Position", color="black", linestyle='', marker='o')
-        for ti, bi in zip(t, self.body_pos[mask]):
-            symbol = self.get_body_arrow(bi)
-            y_offset = offset[0] + 0.1  # Add vertical offset for better visibility
-            self.ax.text(ti, y_offset, symbol, fontsize=12, ha='center', va='center', color='blue')
+        # Only sitting chair image (for body_pos == 5)
+        sitting_img_file = "sitting.png"
+        sitting_img_path = os.path.join(os.getcwd(), sitting_img_file)
 
-        # Plot other signals
+        zoom_factor = 0.05 * (10 / self.window_size)
+
+        for ti, bi in zip(t, self.body_pos[mask]):
+            if bi == 5:
+                if os.path.isfile(sitting_img_path):
+                    img = mpimg.imread(sitting_img_path)
+                    imagebox = OffsetImage(img, zoom=zoom_factor)
+                    ab = AnnotationBbox(imagebox, (ti, offset[0] + 0.1), frameon=False)
+                    self.ax.add_artist(ab)
+                else:
+                    self.ax.text(ti, offset[0] + 0.1, "?", fontsize=12, ha='center', va='center', color='blue')
+            elif bi in [1, 2, 3, 4]:
+                # Draw arrows manually for directions
+                x = ti
+                y = offset[0] + 0.1
+                dx = 0
+                dy = 0
+                color = "Black"
+                size = 0.1
+                if bi == 1:  # Up
+                    dx, dy = 0, size
+                elif bi == 2:  # Down
+                    dx, dy = 0, -size
+                elif bi == 3:  # Left
+                    dx, dy = -size, 0
+                elif bi == 4:  # Right
+                    dx, dy = size, 0
+                self.ax.arrow(x, y, dx, dy, head_width=0.05, head_length=0.05, fc=color, ec=color)
+            else:
+                # Unknown or 0
+                self.ax.text(ti, offset[0] + 0.1, "?", fontsize=12, ha='center', va='center', color='blue')
+
         self.ax.plot(t, pulse + offset[1], label="Pulse", color="red")
         self.ax.plot(t, spo2 + offset[2], label="SpO2", color="green")
         self.ax.plot(t, flow + offset[3], label="Airflow", color="blue")
@@ -177,11 +196,11 @@ class SleepSensePlot(QMainWindow):
         yticks = [np.mean(sig) + off for sig, off in zip([body_pos, pulse, spo2, flow], offset)]
         self.ax.set_yticks(yticks)
         self.ax.set_yticklabels(['Body Position', 'Pulse', 'SpO2', 'Airflow'])
-        
+
         custom_legend = [
-            Line2D([0], [0], color="purple", linestyle='None', markersize=8, label=f"CSA {self.csa_count}"),
-            Line2D([0], [0], color="teal", linestyle='None', markersize=8, label=f"OSA {self.osa_count}"),
-            Line2D([0], [0], color="darkgreen", linestyle='None', markersize=8, label=f"HSA {self.hsa_count}"),
+            Line2D([0], [0], color="purple", linestyle='None', marker='o', markersize=8, label=f"CSA {self.csa_count}"),
+            Line2D([0], [0], color="teal", linestyle='None', marker='o', markersize=8, label=f"OSA {self.osa_count}"),
+            Line2D([0], [0], color="darkgreen", linestyle='None', marker='o', markersize=8, label=f"HSA {self.hsa_count}"),
         ]
         self.ax.legend(handles=custom_legend, loc="upper right")
 
@@ -201,16 +220,19 @@ class SleepSensePlot(QMainWindow):
 
     def zoom_out(self, signal_name):
         self.scales[signal_name] /= 1.2
+        if self.scales[signal_name] < 0.1:
+            self.scales[signal_name] = 0.1
         self.plot_signals()
 
     def set_window_size(self, seconds):
         self.window_size = seconds
         max_slider = int((self.end_time - self.start_time - self.window_size) * 10)
+        if max_slider < 0:
+            max_slider = 0
         self.slider.setMaximum(max_slider)
         self.update_plot(self.slider.value())
-        
+
     def detect_apneas(self):
-        # use pulse as breaths_per_min
         btp = self.pulse.values
         max_btp = btp.max()
         min_btp = btp.min()
@@ -221,7 +243,6 @@ class SleepSensePlot(QMainWindow):
 
         csa_count = osa_count = hsa_count = 0
 
-        # find runs of constant BTP > 2 samples
         runs = []
         run_val = btp[0]
         run_len = 1
@@ -236,7 +257,6 @@ class SleepSensePlot(QMainWindow):
         if run_len > 2:
             runs.append((run_val, run_len))
 
-        # classify each run
         for val, length in runs:
             if length >= 10 and min_btp < val <= csa_thresh:
                 csa_count += 1
