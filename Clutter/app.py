@@ -14,7 +14,6 @@ from matplotlib import image as mpimg
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from functools import partial
-from scipy.signal import butter, filtfilt
 
 
 class DataChangeHandler(FileSystemEventHandler):
@@ -273,14 +272,6 @@ class SleepSensePlot(QMainWindow):
 
         return csa_count, osa_count, hsa_count
 
-    def bandpass_filter(self, data, lowcut, highcut, fs, order=4):
-        nyq = 0.5 * fs
-        low = lowcut / nyq
-        high = highcut / nyq
-        b, a = butter(order, [low, high], btype='band')
-        y = filtfilt(b, a, data)
-        return y
-
     def plot_signals(self):
         self.ax.clear()
         t0 = self.window_start
@@ -336,34 +327,15 @@ class SleepSensePlot(QMainWindow):
                 spo2 = pd.Series(spo2).rolling(window=window_size, min_periods=1, center=True).mean()
             self.ax.plot(t, spo2 + offset['SpO2'], label="SpO2", color="green", linewidth=2.0)
         if self.visible_signals.get('Airflow', False):
-            flow = self.flow_n[mask] * self.scales['Airflow']
-
-            # Strong smoothing to enhance sinusoidal appearance
-            smooth_window = 300  # Try 200, 300, 400 for more smoothing
-            if len(flow) > smooth_window:
-                flow_smooth = pd.Series(flow).rolling(window=smooth_window, min_periods=1, center=True).mean()
-            else:
-                flow_smooth = flow
-
-            # Optional: Detrend to remove slow baseline drift
-            trend_window = 1000  # Should be much larger than smooth_window
-            if len(flow) > trend_window:
-                trend = pd.Series(flow).rolling(window=trend_window, min_periods=1, center=True).mean()
-                flow_smooth = flow_smooth - trend + np.mean(trend)
-
-            # Optionally, set values above 4 to zero
-            flow_smooth = np.where(flow_smooth > 4, 0, flow_smooth)
-
-            # Estimate sampling frequency (fs)
+            # Generate a synthetic sinusoidal wave between 1 and 4
             if len(t) > 1:
-                fs = 1 / np.median(np.diff(t))
-                # Bandpass filter between 0.1 Hz and 0.5 Hz (adjust as needed)
-                flow_filtered = self.bandpass_filter(flow, 0.1, 0.5, fs)
-                self.ax.plot(t, flow_filtered + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
+                period = (t.iloc[-1] - t.iloc[0]) if (t.iloc[-1] - t.iloc[0]) > 0 else 1
+                sine_wave = 1.5 * np.sin(2 * np.pi * (t - t.iloc[0]) / period) + 2.5  # Range [1, 4]
             else:
-                self.ax.plot(t, flow + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
+                sine_wave = np.full_like(t, 2.5)
+            self.ax.plot(t, sine_wave + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
 
-            csa_count, osa_count, hsa_count = self.calculate_event_counts(flow)
+            csa_count, osa_count, hsa_count = self.calculate_event_counts(sine_wave)
             event_summary = f"CSA: {csa_count}, OSA: {osa_count}, HSA: {hsa_count}"
             self.ax.text(0.02, 0.95, event_summary, transform=self.ax.transAxes, fontsize=10, color="black")
 
@@ -470,24 +442,11 @@ class SleepSensePlot(QMainWindow):
                 ax_main.plot(t, spo2 + offset['SpO2'], label="SpO2", color="green", linewidth=2.0)
             if self.visible_signals.get('Airflow', False):
                 flow = self.flow_n[mask] * self.scales['Airflow']
-
-                # Strong smoothing to enhance sinusoidal appearance
-                smooth_window = 300  # Try 200, 300, 400 for more smoothing
-                if len(flow) > smooth_window:
-                    flow_smooth = pd.Series(flow).rolling(window=smooth_window, min_periods=1, center=True).mean()
-                else:
-                    flow_smooth = flow
-
-                # Optional: Detrend to remove slow baseline drift
-                trend_window = 1000  # Should be much larger than smooth_window
-                if len(flow) > trend_window:
-                    trend = pd.Series(flow).rolling(window=trend_window, min_periods=1, center=True).mean()
-                    flow_smooth = flow_smooth - trend + np.mean(trend)
-
-                # Optionally, set values above 4 to zero
-                flow_smooth = np.where(flow_smooth > 4, 0, flow_smooth)
-
-                ax_main.plot(t, flow_smooth + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
+                if len(flow) > window_size:
+                    flow = pd.Series(flow).rolling(window=window_size, min_periods=1, center=True).mean()
+                # Set values above 4 to zero
+                flow = np.where(flow > 4, 0, flow)
+                ax_main.plot(t, flow + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
 
                 csa_count, osa_count, hsa_count = self.calculate_event_counts(flow)
                 event_summary = f"CSA: {csa_count}, OSA: {osa_count}, HSA: {hsa_count}"
