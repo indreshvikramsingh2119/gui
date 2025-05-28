@@ -34,8 +34,6 @@ class SleepSensePlot(QMainWindow):
 
         self.file_path = "DATA2304.TXT"
         self.load_data()
-        self.init_ui()
-        self.normalize_signals()
 
         self.start_time = self.time.iloc[0]
         self.end_time = self.time.iloc[-1]
@@ -43,10 +41,10 @@ class SleepSensePlot(QMainWindow):
         self.window_start = self.start_time
         self.scales = {'Pulse': 1.0, 'SpO2': 1.0, 'Airflow': 1.0}
         self.summary_signal = 'Pulse'
-
         self.visible_signals = {'Body Position': True, 'Pulse': True, 'SpO2': True, 'Airflow': True}
 
-        self.init_ui()
+        self.init_ui()              # <-- call this before normalize_signals
+        self.normalize_signals()    # <-- call this after init_ui
         self.start_file_watcher()
         self.plot_signals()
 
@@ -206,8 +204,7 @@ class SleepSensePlot(QMainWindow):
         self.spo2_n = self.normalize(self.spo2)
         self.flow_n = self.normalize(self.flow)
         self.print_airflow_dominant_period()
-        self.detect_apnea_events()
-        self.update_event_count_label()  # <-- Add this line
+        self.detect_apnea_events()  # <-- Add this line to detect apnea events PTR ADD THIS LINE
 
     def normalize(self, series):
         range_ = series.max() - series.min()
@@ -343,8 +340,8 @@ class SleepSensePlot(QMainWindow):
             # upper = np.percentile(flow_smooth, 99)
             # flow_smooth = np.clip(flow_smooth, lower, upper)
 
-            self.ax.plot(t, flow_smooth + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
-            self.ax.plot(t, self.flow_n[mask] * self.scales['Airflow'] + offset['Airflow'], label="Airflow (raw)", color="blue", linewidth=1.0)
+            # self.ax.plot(t, flow_smooth + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
+            self.ax.plot(t, self.flow_n[mask] * self.scales['Airflow'] + offset['Airflow'],  linewidth=1.0)
 
         # --- Highlight detected apnea/hypopnea events ---
         if hasattr(self, "detected_events"):
@@ -419,7 +416,6 @@ class SleepSensePlot(QMainWindow):
         self.load_data()
         self.normalize_signals()
         self.end_time = self.time.iloc[-1]
-        self.update_event_count_label()  # <-- Add this line
 
         max_slider = int((self.end_time - self.start_time - self.window_size) * 10)
         max_slider = max(max_slider, 0)
@@ -519,7 +515,7 @@ class SleepSensePlot(QMainWindow):
             window_size = 10
             if len(summary_data) > window_size:
                 summary_data = pd.Series(summary_data).rolling(window=window_size, min_periods=1, center=True).mean()
-            ax_summary.plot(self.time, summary_data, label=summary_signal, color="blue", linewidth=0.7)
+            # ax_summary.plot(self.time, summary_data, label=summary_signal, color="blue", linewidth=0.7)
             rect = Rectangle(
                 (self.window_start, 0),
                 self.window_size,
@@ -572,7 +568,7 @@ class SleepSensePlot(QMainWindow):
             # Find the most frequent interval (mode)
             if len(intervals) > 0:
                 mode_interval = pd.Series(intervals).mode().iloc[0]
-                print(f"Most frequent Airflow period (seconds): {mode_interval:.2f}")
+                # print(f"Most frequent Airflow period (seconds): {mode_interval:.2f}")
             else:
                 print("Not enough intervals to determine period.")
         else:
@@ -580,57 +576,99 @@ class SleepSensePlot(QMainWindow):
 
     def detect_apnea_events(self):
         """
-        Detects CSA, OSA, and HSA events based on airflow signal.
-        Prints detected events with their type and time.
+        Uses block-based logic to detect CSA, OSA, HSA events.
         """
-        # Parameters (tune as needed)
-        fs = 1 / np.median(np.diff(self.time))  # Sampling frequency (Hz)
-        min_apnea_duration = 10  # seconds
-        min_hypopnea_duration = 10  # seconds
-        apnea_threshold = 0.1     # Normalized airflow below this is considered apnea
-        hypopnea_threshold = 0.5  # Normalized airflow below this is considered hypopnea
-
-        # Use normalized airflow
-        airflow = self.flow_n.values
-        times = self.time.values
-
-        events = []
-        in_event = False
-        event_start = None
-        event_type = None
-
-        for i in range(len(airflow)):
-            if airflow[i] < apnea_threshold:
-                if not in_event:
-                    in_event = True
-                    event_start = times[i]
-                    event_type = "apnea"
-            elif airflow[i] < hypopnea_threshold:
-                if not in_event:
-                    in_event = True
-                    event_start = times[i]
-                    event_type = "hypopnea"
+        results = self.calculate_event_counts()
+        self.detected_events = []
+        for typ in ['CSA', 'OSA', 'HSA']:
+            for start, end in results[typ]['windows']:
+                self.detected_events.append((start, end, typ))
+        # Print counts for all event types, or "Not detected" if zero
+        for typ in ['CSA', 'OSA', 'HSA']:
+            count = results[typ]['count']
+            if count == 0:
+                print(f"{typ} not detected")
             else:
-                if in_event:
-                    event_end = times[i]
-                    duration = event_end - event_start
-                    if event_type == "apnea" and duration >= min_apnea_duration:
-                        # For demo: alternate CSA/OSA (real code would use chest/abd signals)
-                        detected_type = "CSA" if (i // 2) % 2 == 0 else "OSA"
-                        events.append((event_start, event_end, detected_type))
-                    elif event_type == "hypopnea" and duration >= min_hypopnea_duration:
-                        events.append((event_start, event_end, "HSA"))
-                    in_event = False
-                    event_start = None
-                    event_type = None
-
-        # Print detected events
+                print(f"Total {typ} events in data: {count}")
+        # Optionally print for debug
         print("Detected Apnea/Hypopnea Events:")
-        for start, end, typ in events:
+        for start, end, typ in self.detected_events:
             print(f"{typ} from {start:.1f}s to {end:.1f}s (duration: {end-start:.1f}s)")
 
-        # Optionally, store events for later use (e.g., plotting)
-        self.detected_events = events
+    def calculate_event_counts(self):
+        btp = self.flow.values.astype(int)
+        np.set_printoptions(suppress=True, precision=2)
+        time = self.time.values.astype(float)
+
+        vc = pd.Series(btp).value_counts()
+
+        max_btp = int(np.max(btp))
+        min_btp = int(np.min(btp))
+        max_candidates = [max_btp - i*10 for i in range(8)]
+        min_candidates = [min_btp + i*10 for i in range(8)]
+        max_cands = [v for v in max_candidates if v in vc.index]
+        min_cands = [v for v in min_candidates if v in vc.index]
+        best_max = max(max_cands, key=lambda v: vc[v]) if max_cands else max_btp
+        best_min = max(min_cands, key=lambda v: vc[v]) if min_cands else min_btp
+
+        btp_modified = np.where(btp > best_max, 0, btp)
+
+        csa_thresh = int(0.10 * best_max + best_min)
+        osa_thresh = int(0.50 * best_max + best_min)
+        hsa_thresh = int(0.80 * best_max + best_min)
+
+        print(f"Best Max: {best_max}, Best Min: {best_min}")
+        print(f"CSA Threshold: {csa_thresh}, OSA Threshold: {osa_thresh}, HSA Threshold: {hsa_thresh}")
+
+        csa_count = osa_count = hsa_count = 0
+        csa_windows, osa_windows, hsa_windows = [], [], []
+
+        total_samples = len(btp)
+
+        # 1. CSA: 30-sample window (10s)
+        csa_window = 30
+        for i in range(0, total_samples, csa_window):
+            block = btp_modified[i:i + csa_window]
+            print(f"CSA Block {block}")
+            if len(block) < csa_window:
+                break
+            if np.all((block > best_min) & (block <= csa_thresh)):
+                csa_count += 1
+                start_ms = round(time[i], 2)
+                end_ms   = round(time[i + csa_window - 1], 2)
+                csa_windows.append((start_ms, end_ms))
+
+        # 2. OSA: 15-sample window (5s)
+        osa_window = 15
+        for i in range(0, total_samples, osa_window):
+            block = btp_modified[i:i + osa_window]
+            print(f"OSA Block {block}")
+            if len(block) < osa_window:
+                break
+            if np.all((block > csa_thresh) & (block <= osa_thresh)):
+                osa_count += 1
+                start_ms = round(time[i], 2)
+                end_ms   = round(time[i + osa_window - 1], 2)
+                osa_windows.append((start_ms, end_ms))
+
+        # 3. HSA: 15-sample window (5s)
+        hsa_window = 15
+        for i in range(0, total_samples, hsa_window):
+            block = btp_modified[i:i + hsa_window]
+            print(f"HSA Block {block}")
+            if len(block) < hsa_window:
+                break
+            if np.all((block > osa_thresh) & (block <= hsa_thresh)):
+                hsa_count += 1
+                start_ms = round(time[i], 2)
+                end_ms   = round(time[i + hsa_window - 1], 2)
+                hsa_windows.append((start_ms, end_ms))
+
+        return {
+            'CSA': {'count': csa_count, 'windows': csa_windows},
+            'OSA': {'count': osa_count, 'windows': osa_windows},
+            'HSA': {'count': hsa_count, 'windows': hsa_windows},
+        }
 
     def update_event_count_label(self):
         hsa_count = csa_count = osa_count = 0
@@ -646,6 +684,75 @@ class SleepSensePlot(QMainWindow):
             f"<b>Event Counts (Full Data):</b><br>"
             f"HSA: {hsa_count}<br>CSA: {csa_count}<br>OSA: {osa_count}"
         )
+
+
+
+def print_airflow_and_apnea_ranges(self):
+    # Print counts for airflow values 1 to 10
+    print("Airflow value counts (1 to 10):")
+    for val in range(1, 11):
+        count = np.sum(self.flow == val)
+        print(f"Airflow value {val}: {count}")
+
+    # Detect CSA, OSA, HSA based on value ranges
+    csa_count = np.sum((self.flow >= 1) & (self.flow < 2))
+    osa_count = np.sum((self.flow >= 2) & (self.flow < 6))
+    hsa_count = np.sum((self.flow >= 6) & (self.flow < 9))
+    print(f"\nCSA (1 <= airflow < 2): {csa_count}")
+    print(f"OSA (2 <= airflow < 6): {osa_count}")
+    print(f"HSA (6 <= airflow < 9): {hsa_count}")
+
+
+def load_data(self):
+    self.data = pd.read_csv(self.file_path, header=None)
+    self.time = self.data[0].astype(float) / 1000
+    self.body_pos = self.data[1].astype(int)
+    self.pulse = self.data[2].astype(float)
+    self.spo2 = self.data[3].astype(float)
+    self.flow = self.data[7].astype(float)
+
+    # Print airflow value counts and apnea detection by range
+    self.print_airflow_and_apnea_ranges()
+
+
+def detect_apnea_events(self):
+    """
+    Uses block-based logic to detect CSA, OSA, HSA events.
+    """
+    results = self.calculate_event_counts()
+    self.detected_events = []
+    for typ in ['CSA', 'OSA', 'HSA']:
+        for start, end in results[typ]['windows']:
+            self.detected_events.append((start, end, typ))
+    # Print counts for all event types, or "Not detected" if zero
+    for typ in ['CSA', 'OSA', 'HSA']:
+        count = results[typ]['count']
+        if count == 0:
+            print(f"{typ} not detected")
+        else:
+            print(f"Total {typ} events in data: {count}")
+    # Optionally print for debug
+    print("Detected Apnea/Hypopnea Events:")
+    for start, end, typ in self.detected_events:
+        print(f"{typ} from {start:.1f}s to {end:.1f}s (duration: {end-start:.1f}s)")
+    """
+    Uses block-based logic to detect CSA, OSA, HSA events.
+    """
+    results = self.calculate_event_counts()
+    self.detected_events = []
+    for typ in ['CSA', 'OSA', 'HSA']:
+        for start, end in results[typ]['windows']:
+            self.detected_events.append((start, end, typ))
+    # Print counts for all event types
+    print(f"Total CSA events in data: {results['CSA']['count']}")
+    print(f"Total OSA events in data: {results['OSA']['count']}")
+    print(f"Total HSA events in data: {results['HSA']['count']}")
+    # Optionally print for debug
+    print("Detected Apnea/Hypopnea Events:")
+    for start, end, typ in self.detected_events:
+        print(f"{typ} from {start:.1f}s to {end:.1f}s (duration: {end-start:.1f}s)")
+
+
 
 
 if __name__ == "__main__":
