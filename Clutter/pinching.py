@@ -62,12 +62,7 @@ class SleepApneaDetector:
         for start, end in apnea_events:
             plt.axvspan(start, end, color='red', alpha=0.3, label='Apnea Event')
         
-        plt.xlabel('Time (s)')
-        plt.ylabel('Values')
-        plt.legend()
-        plt.title('Sleep Apnea Detection')
-        plt.show()
-
+        
 # Example usage
 detector = SleepApneaDetector('data.csv')
 detector.load_data()

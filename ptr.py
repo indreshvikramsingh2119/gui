@@ -22,8 +22,8 @@ class DataChangeHandler(FileSystemEventHandler):
         self.plot_window = plot_window
 
     def on_modified(self, event):
-        if event.src_path.endswith("DATA2304.TXT"):
-            print("Data file changed, reloading...")  # Debug message
+        if event.src_path.endswith("DATA2245.TXT"):
+            print("Data file changed, reloading...")
             QTimer.singleShot(0, self.plot_window.reload_data)
 
 
@@ -32,7 +32,7 @@ class SleepSensePlot(QMainWindow):
         super().__init__()
         self.setWindowTitle("Developer Mode - Sleepsense Plotting") 
 
-        self.file_path = "DATA2304.TXT"
+        self.file_path = "DATA2245.TXT"
         self.load_data()
         self.normalize_signals()
 
@@ -44,6 +44,9 @@ class SleepSensePlot(QMainWindow):
         self.summary_signal = 'Pulse'
 
         self.visible_signals = {'Body Position': True, 'Pulse': True, 'SpO2': True, 'Airflow': True}
+        
+        self.detected_windows = {'CSA': [], 'OSA': [], 'HSA': []}
+        self.selected_event    = "None"
 
         self.init_ui()
         self.start_file_watcher()
@@ -57,7 +60,7 @@ class SleepSensePlot(QMainWindow):
 
         # Timeframe buttons layout
         timeframe_layout = QHBoxLayout()
-        for label, sec in [("5s", 5), ("10s", 10), ("30s", 30), ("1m", 60), ("2m", 120)]:
+        for label, sec in [("5s", 5), ("10s", 10), ("30s", 30), ("1m", 60), ("2m", 120), ("5m", 300)]:
             btn = QPushButton(label)
             btn.clicked.connect(lambda _, s=sec: self.set_window_size(s))
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -69,6 +72,18 @@ class SleepSensePlot(QMainWindow):
         self.summary_ax = self.summary_canvas.figure.subplots()
         self.summary_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         right_layout.addWidget(self.summary_canvas, stretch=1)
+        
+        self.apnea_type_combo = QComboBox()
+        self.apnea_type_combo.addItems(["CSA", "OSA", "HSA"])
+        self.apnea_type_combo.setFixedWidth(100)
+        right_layout.addWidget(QLabel("Apnea Type:"))
+        right_layout.addWidget(self.apnea_type_combo)
+        
+        # after you build self.signal_selector, add:
+        self.auto_detect_btn = QPushButton("Auto Detect")
+        self.auto_detect_btn.setFont(QFont("Arial",12,QFont.Bold))
+        self.auto_detect_btn.clicked.connect(self.on_auto_detect)
+        right_layout.addWidget(self.auto_detect_btn)
 
         # Signal selector layout
         signal_selection_layout = QHBoxLayout()
@@ -178,6 +193,22 @@ class SleepSensePlot(QMainWindow):
         checkbox.toggled.connect(lambda checked, sig=signal_name: self.toggle_signal(sig, checked))
         self.toggle_checkboxes[signal_name] = checkbox
         return checkbox
+    
+    def on_auto_detect(self):
+        # read dropdown
+        evt = self.apnea_type_combo.currentText()   # “CSA”, “OSA” or “HSA”
+        self.selected_event = evt
+
+        # run detector and pull out windows
+        results = self.calculate_event_counts()
+        self.detected_windows = {
+            'CSA': results['CSA']['windows'],
+            'OSA': results['OSA']['windows'],
+            'HSA': results['HSA']['windows'],
+        }
+
+        # redraw with highlights
+        self.plot_signals()
 
     def load_data(self):
         self.data = pd.read_csv(self.file_path, header=None)
@@ -191,15 +222,14 @@ class SleepSensePlot(QMainWindow):
         targets = [70, 60, 50, 40, 30,20, 15,14,13,12,11,10,7,5,4,3,2,1,8,6,9]
         for target in targets:
             count = np.sum(self.flow == target)
-            print(f"Airflow value {target} occurs {count} times")
+            # print(f"Airflow value {target} occurs {count} times")
 
     def normalize_signals(self):
         self.body_pos_n = self.normalize(self.body_pos)
         self.pulse_n = self.normalize(self.pulse)
         self.spo2_n = self.normalize(self.spo2)
         self.flow_n = self.normalize(self.flow)
-        self.print_airflow_dominant_period()
-        self.detect_apnea_events()  # <-- Add this line to detect apnea events PTR ADD THIS LINE
+        self.print_airflow_dominant_period()  # Add this line
 
     def normalize(self, series):
         range_ = series.max() - series.min()
@@ -254,6 +284,136 @@ class SleepSensePlot(QMainWindow):
     def toggle_signal(self, signal_name, visible):
         self.visible_signals[signal_name] = visible
         self.plot_signals()
+        
+    def calculate_event_counts(self):
+        btp = self.flow.values.astype(int)
+        
+        np.set_printoptions(suppress=True, precision=2)
+        time = self.time.values.astype(float)
+        
+        # max_btp = int(self.flow.max())
+        # min_btp = int(self.flow.min())
+        # print(f"Airflow max: {max_btp}, min: {min_btp}")
+        
+        # max_btp1 = int(self.flow.max() - 10)
+        # max_btp2 = int(self.flow.max() - 20)
+        # max_btp3 = int(self.flow.max() - 30)
+        # max_btp4 = int(self.flow.max() - 40)
+        # max_btp5 = int(self.flow.max() - 50)
+        # max_btp_test = int(self.flow.max() - 55)
+        # max_btp6 = int(self.flow.max() - 60)
+        # max_btp7 = int(self.flow.max() - 65)
+        
+        # max_btp_count = (self.flow == max_btp).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp1).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp1} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp2).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp2} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp3).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp3} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp4).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp4} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp5).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp5} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp_test).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp_test} occurred {max_btp_count} times")
+        
+        # max_btp_count = (self.flow == max_btp6).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp6} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp7).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp7} occurred {max_btp_count} times")
+        
+        best_max = None
+        best_min = None
+        
+        vc = self.flow.value_counts()
+        
+        max_btp = int(self.flow.max())
+        min_btp = int(self.flow.min())
+        max_candidates = [max_btp - i*10 for i in range(8)]
+        min_candidates = [min_btp + i*10 for i in range(8)]
+        max_cands = [v for v in max_candidates if v in vc.index]
+        min_cands = [v for v in min_candidates if v in vc.index]
+        best_max = max(max_cands, key=lambda v: vc[v]) if max_cands else max_btp
+        best_min = max(min_cands, key=lambda v: vc[v]) if min_cands else min_btp
+        
+        print(f"PT Max BTP: {max_btp}, Min BTP: {min_btp}")
+        print(f"Best Max BTP: {best_max}, Best Min BTP: {best_min}")
+        
+        btp_modified = np.where(btp > best_max, 0, btp)
+        
+        csa_thresh = int(0.10 * best_max + best_min)
+        osa_thresh = int(0.50 * best_max + best_min)
+        hsa_thresh = int(0.80 * best_max + best_min)
+        
+        print(f"CSA threshold: {csa_thresh}, OSA threshold: {osa_thresh}, HSA threshold: {hsa_thresh}")
+        
+        csa_count = osa_count = hsa_count = 0
+        csa_blocks, osa_blocks, hsa_blocks = [], [], []
+        csa_windows, osa_windows, hsa_windows = [], [], []
+        
+        print("BTP values modified:", btp_modified)
+
+        total_samples = len(btp)
+
+        # 1. CSA: 30-sample window (10s)
+        csa_window = 30
+        for i in range(0, total_samples, csa_window):
+            block = btp_modified[i:i + csa_window]
+            if len(block) < csa_window:
+                break
+            time_counts = [(j // 3) + 1 for j in range(len(block))]  # [1..10]
+            # print("CSA block", block)
+            if np.all((block > best_min) & (block <= csa_thresh)):
+                csa_count += 1
+                csa_blocks.append((time_counts, block.tolist()))
+                start_ms = round(time[i], 2)
+                end_ms   = round(time[i+29], 2)
+                print(f"CSA block: {block}, start: {start_ms}, end: {end_ms}")
+                csa_windows.append((start_ms, end_ms))
+
+        # 2. OSA: 15-sample window (5s)
+        osa_window = 15
+        for i in range(0, total_samples, osa_window):
+            block = btp_modified[i:i + osa_window]
+            if len(block) < osa_window:
+                break
+            time_counts = [(j // 3) + 1 for j in range(len(block))]  # [1..5]
+            # print("OSA block", block)
+            if np.all((block > csa_thresh) & (block <= osa_thresh)):
+                osa_count += 1
+                osa_blocks.append((time_counts, block.tolist()))
+                start_ms = round(time[i], 2)
+                end_ms   = round(time[i+14], 2)
+                print(f"OSA block: {block}, start: {start_ms}, end: {end_ms}")
+                osa_windows.append((start_ms, end_ms))
+
+        # 3. HSA: 15-sample window (5s)
+        hsa_window = 15
+        for i in range(0, total_samples, hsa_window):
+            block = btp_modified[i:i + hsa_window]
+            if len(block) < hsa_window:
+                break
+            time_counts = [(j // 3) + 1 for j in range(len(block))]  # [1..5]
+            # print("HSA block", block)
+            if np.all((block > osa_thresh) & (block <= hsa_thresh)):
+                hsa_count += 1
+                hsa_blocks.append((time_counts, block.tolist()))
+                start_ms = round(time[i], 2)
+                end_ms   = round(time[i+14], 2)
+                print(f"HSA block: {block}, start: {start_ms}, end: {end_ms}")
+                hsa_windows.append((start_ms, end_ms))
+                
+        print(f"CSA Windows: {csa_count}")
+        print(f"OSA Windows: {osa_count}")
+        print(f"HSA Windows: {hsa_count}")
+
+        return {
+            'CSA': {'count': csa_count, 'windows': csa_windows},
+            'OSA': {'count': osa_count, 'windows': osa_windows},
+            'HSA': {'count': hsa_count, 'windows': hsa_windows},
+            }
 
     def bandpass_filter(self, data, lowcut, highcut, fs, order=4):
         nyq = 0.5 * fs
@@ -271,8 +431,8 @@ class SleepSensePlot(QMainWindow):
 
     def plot_signals(self):
         self.ax.clear()
-        t0 = self.time.iloc[0]
-        t1 = self.time.iloc[-1]
+        t0 = self.window_start
+        t1 = t0 + self.window_size
         mask = (self.time >= t0) & (self.time <= t1)
         t = self.time[mask]
 
@@ -324,68 +484,29 @@ class SleepSensePlot(QMainWindow):
             self.ax.plot(t, spo2 + offset['SpO2'], label="SpO2", color="green", linewidth=2.0)
         if self.visible_signals.get('Airflow', False):
             flow = self.flow_n[mask] * self.scales['Airflow']
-            smooth_window = 20  # much less smoothing
+            smooth_window = 1000
             if len(flow) > smooth_window:
                 flow_smooth = pd.Series(flow).rolling(window=smooth_window, min_periods=1, center=True).mean()
             else:
                 flow_smooth = flow
 
-            # Optionally skip clipping for now
-            # lower = np.percentile(flow_smooth, 1)
-            # upper = np.percentile(flow_smooth, 99)
-            # flow_smooth = np.clip(flow_smooth, lower, upper)
+            lower = np.percentile(flow_smooth, 1)
+            upper = np.percentile(flow_smooth, 99)
+            flow_smooth = np.clip(flow_smooth, lower, upper)
+            
+            results = self.calculate_event_counts()
+            csa_count = results['CSA']['count']
+            osa_count = results['OSA']['count']
+            hsa_count = results['HSA']['count']
+            event_summary = f"CSA: {csa_count}, OSA: {osa_count}, HSA: {hsa_count}"
+            self.ax.text(0.02, 0.95, event_summary, transform=self.ax.transAxes, fontsize=10, color="black")
 
-            self.ax.plot(t, flow_smooth + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
-            self.ax.plot(t, self.flow_n[mask] * self.scales['Airflow'] + offset['Airflow'], label="Airflow (raw)", color="blue", linewidth=1.0)
+            flow_display = flow_smooth
+            lower = np.percentile(flow_display, 1)
+            upper = np.percentile(flow_display, 99)
+            flow_display = np.clip(flow_display, lower, upper)
 
-        # --- Highlight detected apnea/hypopnea events ---
-        if hasattr(self, "detected_events"):
-            event_colors = {"CSA": "#ff4d4d", "OSA": "#4da6ff", "HSA": "#ffd966"}  # Red, Blue, Yellow
-            airflow_base = 3.6  # y-offset for Airflow
-            bar_half_height = 0.3  # half the thickness of the bar
-            for start, end, typ in self.detected_events:
-                if end < t0 or start > t1:
-                    continue
-                plot_start = max(start, t0)
-                plot_end = min(end, t1)
-                self.ax.axvspan(
-                    plot_start, plot_end,
-                    ymin=(airflow_base - bar_half_height) / 12,
-                    ymax=(airflow_base + bar_half_height) / 12,
-                    color=event_colors.get(typ, "#cccccc"),
-                    alpha=0.7,
-                    label=typ
-                )
-            # To avoid duplicate legend entries
-            handles, labels = self.ax.get_legend_handles_labels()
-            unique = dict(zip(labels, handles))
-            self.ax.legend(unique.values(), unique.keys(), loc="upper right")
-
-                                    # --- Add statistics box for HSA, CSA, OSA in current window ---
-        hsa_count = csa_count = osa_count = 0
-        t0 = self.window_start
-        t1 = t0 + self.window_size
-        if hasattr(self, "detected_events"):
-            for start, end, typ in self.detected_events:
-                if end < t0 or start > t1:
-                    continue
-                if typ == "HSA":
-                    hsa_count += 1
-                elif typ == "CSA":
-                    csa_count += 1
-                elif typ == "OSA":
-                    osa_count += 1
-
-        stats_text = f"HSA: {hsa_count}\nCSA: {csa_count}\nOSA: {osa_count}"
-        # Always create the stats box after clearing the axes
-        self._stats_box = self.ax.text(
-            0.01, 0.98, stats_text,
-            transform=self.ax.transAxes,
-            fontsize=14,
-            verticalalignment='top',
-            horizontalalignment='left',
-            bbox=dict(boxstyle="round,pad=0.4", facecolor="#f7f7f7", edgecolor="gray", alpha=0.8)
-        )
+            self.ax.plot(t, flow_display + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
 
         self.ax.set_xlim(t0, t1)
         self.ax.set_ylim(-0.5, 12)
@@ -393,6 +514,50 @@ class SleepSensePlot(QMainWindow):
         self.ax.grid(True, linestyle='--', alpha=0.5)
 
         self.ax.legend(loc="upper right")
+        
+        airflow_offset = 3.6                  # same offset you plot Airflow at
+        airflow_amplitude = 1.0 * self.scales['Airflow'] 
+        
+        color_map = {
+            'CSA': 'purple',
+            'OSA': 'teal',
+            'HSA': 'darkgreen',
+        }
+        
+        if self.selected_event in self.detected_windows:
+            for start_s, end_s in self.detected_windows[self.selected_event]:
+                
+                duration = end_s - start_s
+                
+                # Ensure the highlight covers the waveform
+                rect = Rectangle(
+                    (start_s, airflow_offset - airflow_amplitude / 2),  # align with center of waveform
+                    duration,
+                    airflow_amplitude,
+                    color=color_map[self.selected_event],
+                    alpha=0.3,
+                    linewidth=0
+                )
+                self.ax.add_patch(rect)
+                
+                mid_s = (start_s + end_s) / 2
+                # self.ax.axvline(mid_s, color=color_map[self.selected_event], linestyle='--', linewidth=1.2, alpha=0.8)
+                
+                label = f"{self.selected_event}  {duration:.1f}s"
+
+                # Add label on top of the midpoint
+                self.ax.text(
+                    mid_s,
+                    airflow_offset + airflow_amplitude / 2 + 0.2,  # slightly above the waveform
+                    label,
+                    color=color_map[self.selected_event],
+                    fontsize=9,
+                    ha='center',
+                    va='bottom',
+                    fontweight='bold',
+                    bbox=dict(facecolor='white', edgecolor=color_map[self.selected_event], boxstyle='round,pad=0.3', alpha=0.6)
+                )
+        
         self.canvas.draw_idle()
         self.plot_summary_signal()
 
@@ -427,20 +592,16 @@ class SleepSensePlot(QMainWindow):
 
     def save_plot(self):
         options = QFileDialog.Options()
-        file_path, _ = QFileDialog.getSaveFileName(self, "Save Plot", "", "PNG Files (*.png);;All Files (*)", options=options)
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Plot", "", "PDF Files (*.png);;All Files (*)", options=options)
         if file_path:
             import matplotlib.pyplot as plt
-            from matplotlib.patches import Rectangle
 
             # Create a new figure with two subplots (main + summary)
-            fig, (ax_main, ax_summary) = plt.subplots(
-                2, 1, figsize=(18, 10), sharex=True, 
-                gridspec_kw={'height_ratios': [4, 1]}
-            )
+            fig, (ax_main, ax_summary) = plt.subplots(2, 1, figsize=(24, 16), sharex=True, gridspec_kw={'height_ratios': [4, 1]})
 
             # --- Main plot ---
-            t0 = self.time.iloc[0]
-            t1 = self.time.iloc[-1]
+            t0 = self.window_start
+            t1 = t0 + self.window_size
             mask = (self.time >= t0) & (self.time <= t1)
             t = self.time[mask]
             offset = {
@@ -450,54 +611,78 @@ class SleepSensePlot(QMainWindow):
                 'Airflow': 3.6,
             }
 
+            # Plot Body Position images
+            if self.visible_signals.get('Body Position', False):
+                body_pos_segment = self.body_pos[mask]
+                t_segment = t.reset_index(drop=True)
+                n_points = int(self.window_size * 100 / 60)
+                n_points = max(1, n_points)
+                indices = np.linspace(0, len(body_pos_segment) - 1, n_points, dtype=int) if len(body_pos_segment) > 0 else []
+                for i in indices:
+                    pos = body_pos_segment.iloc[i]
+                    img_file = {
+                        0: 'right.png',
+                        1: 'left.png',
+                        2: 'Uparrow.jpg',
+                        3: 'down.png',
+                        5: 'sittingchair.png'
+                    }.get(pos)
+                    if img_file:
+                        try:
+                            img = mpimg.imread(img_file)
+                            img_width = 0.30
+                            img_height = 0.30
+                            y_bottom = offset['Body Position']
+                            extent = [t_segment.iloc[i], t_segment.iloc[i] + img_width, y_bottom, y_bottom + img_height]
+                            ax_main.imshow(img, aspect='auto', extent=extent)
+                        except FileNotFoundError:
+                            pass
+
+            window_size = 17
             # Plot signals
             if self.visible_signals.get('Pulse', False):
                 pulse = self.pulse_n[mask] * self.scales['Pulse']
-                window_size = 10
                 if len(pulse) > window_size:
                     pulse = pd.Series(pulse).rolling(window=window_size, min_periods=1, center=True).mean()
                 ax_main.plot(t, pulse + offset['Pulse'], label="Pulse", color="red", linewidth=2.0)
             if self.visible_signals.get('SpO2', False):
                 spo2 = self.spo2_n[mask] * self.scales['SpO2']
-                window_size = 10
                 if len(spo2) > window_size:
                     spo2 = pd.Series(spo2).rolling(window=window_size, min_periods=1, center=True).mean()
                 ax_main.plot(t, spo2 + offset['SpO2'], label="SpO2", color="green", linewidth=2.0)
             if self.visible_signals.get('Airflow', False):
                 flow = self.flow_n[mask] * self.scales['Airflow']
-                smooth_window = 1000
+                smooth_window = 1000  # Try 1000 or higher for more smoothing
                 if len(flow) > smooth_window:
                     flow_smooth = pd.Series(flow).rolling(window=smooth_window, min_periods=1, center=True).mean()
                 else:
                     flow_smooth = flow
+
+                # Clip outliers before scaling
                 lower = np.percentile(flow_smooth, 1)
                 upper = np.percentile(flow_smooth, 99)
                 flow_smooth = np.clip(flow_smooth, lower, upper)
-                flow_display = flow_smooth
+
+                # Only smooth and clip outliers, do not rescale to a fixed range
+                flow_display = flow_smooth  # Already multiplied by self.scales['Airflow']
+                lower = np.percentile(flow_display, 1)
+                upper = np.percentile(flow_display, 99)
+                flow_display = np.clip(flow_display, lower, upper)
+                
+                results = self.calculate_event_counts()
+                csa_count = results['CSA']['count']
+                osa_count = results['OSA']['count']
+                hsa_count = results['HSA']['count']
+                event_summary = f"CSA: {csa_count}, OSA: {osa_count}, HSA: {hsa_count}"
+                ax_main.text(0.02, 0.95, event_summary, transform=ax_main.transAxes, fontsize=10, color="black")
+
                 ax_main.plot(t, flow_display + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
 
-            # Highlight events as vertical colored regions
-            if hasattr(self, "detected_events"):
-                event_colors = {"CSA": "#ff4d4d", "OSA": "#4da6ff", "HSA": "#ffd966"}
-                for start, end, typ in self.detected_events:
-                    if end < t0 or start > t1:
-                        continue
-                    plot_start = max(start, t0)
-                    plot_end = min(end, t1)
-                    ax_main.axvspan(
-                        plot_start, plot_end,
-                        color=event_colors.get(typ, "#cccccc"),
-                        alpha=0.3,
-                        label=typ
-                    )
-                handles, labels = ax_main.get_legend_handles_labels()
-                unique = dict(zip(labels, handles))
-                ax_main.legend(unique.values(), unique.keys(), loc="upper right")
-
             ax_main.set_xlim(t0, t1)
-            ax_main.set_ylim(-0.5, 12)
-            ax_main.set_title("Main Graph")
+            ax_main.set_ylim(-0.5, 5.5)
+            ax_main.set_title("Sleepsense Signal Viewer")
             ax_main.grid(True, linestyle='--', alpha=0.5)
+            ax_main.legend(loc="upper right")
 
             # --- Summary plot ---
             summary_signal = self.summary_signal
@@ -510,7 +695,8 @@ class SleepSensePlot(QMainWindow):
             window_size = 10
             if len(summary_data) > window_size:
                 summary_data = pd.Series(summary_data).rolling(window=window_size, min_periods=1, center=True).mean()
-            ax_summary.plot(self.time, summary_data, label=summary_signal, color="blue", linewidth=0.7)
+            lw = 0.5 if summary_signal == "Airflow" else 1
+            ax_summary.plot(self.time, summary_data, label=summary_signal, color="blue", linewidth=0.5)
             rect = Rectangle(
                 (self.window_start, 0),
                 self.window_size,
@@ -522,6 +708,8 @@ class SleepSensePlot(QMainWindow):
             ax_summary.set_title(f"{summary_signal} Overview")
             ax_summary.legend(loc="upper right")
             ax_summary.set_xlim(self.time.iloc[0], self.time.iloc[-1])
+
+            # Set x-label only on summary plot for clarity
             ax_summary.set_xlabel("Time (s)")
 
             plt.tight_layout()
@@ -568,60 +756,6 @@ class SleepSensePlot(QMainWindow):
                 print("Not enough intervals to determine period.")
         else:
             print("Not enough zero-crossings to determine period.")
-
-    def detect_apnea_events(self):
-        """
-        Detects CSA, OSA, and HSA events based on airflow signal.
-        Prints detected events with their type and time.
-        """
-        # Parameters (tune as needed)
-        fs = 1 / np.median(np.diff(self.time))  # Sampling frequency (Hz)
-        min_apnea_duration = 10  # seconds
-        min_hypopnea_duration = 10  # seconds
-        apnea_threshold = 0.1     # Normalized airflow below this is considered apnea
-        hypopnea_threshold = 0.5  # Normalized airflow below this is considered hypopnea
-
-        # Use normalized airflow
-        airflow = self.flow_n.values
-        times = self.time.values
-
-        events = []
-        in_event = False
-        event_start = None
-        event_type = None
-
-        for i in range(len(airflow)):
-            if airflow[i] < apnea_threshold:
-                if not in_event:
-                    in_event = True
-                    event_start = times[i]
-                    event_type = "apnea"
-            elif airflow[i] < hypopnea_threshold:
-                if not in_event:
-                    in_event = True
-                    event_start = times[i]
-                    event_type = "hypopnea"
-            else:
-                if in_event:
-                    event_end = times[i]
-                    duration = event_end - event_start
-                    if event_type == "apnea" and duration >= min_apnea_duration:
-                        # For demo: alternate CSA/OSA (real code would use chest/abd signals)
-                        detected_type = "CSA" if (i // 2) % 2 == 0 else "OSA"
-                        events.append((event_start, event_end, detected_type))
-                    elif event_type == "hypopnea" and duration >= min_hypopnea_duration:
-                        events.append((event_start, event_end, "HSA"))
-                    in_event = False
-                    event_start = None
-                    event_type = None
-
-        # Print detected events
-        print("Detected Apnea/Hypopnea Events:")
-        for start, end, typ in events:
-            print(f"{typ} from {start:.1f}s to {end:.1f}s (duration: {end-start:.1f}s)")
-
-        # Optionally, store events for later use (e.g., plotting)
-        self.detected_events = events
 
 
 
