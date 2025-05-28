@@ -34,6 +34,7 @@ class SleepSensePlot(QMainWindow):
 
         self.file_path = "DATA2304.TXT"
         self.load_data()
+        self.init_ui()
         self.normalize_signals()
 
         self.start_time = self.time.iloc[0]
@@ -169,6 +170,12 @@ class SleepSensePlot(QMainWindow):
         save_btn.clicked.connect(self.save_plot)
         right_layout.addWidget(save_btn)
 
+        # --- Event count label ---
+        self.event_count_label = QLabel()
+        self.event_count_label.setFont(QFont("Arial", 13, QFont.Bold))
+        self.event_count_label.setStyleSheet("color: #222; background: #f7f7f7; border-radius: 6px; padding: 8px;")
+        right_layout.addWidget(self.event_count_label)
+
         self.central_widget.setLayout(right_layout)
         self.resize(1400, 900)
 
@@ -199,7 +206,8 @@ class SleepSensePlot(QMainWindow):
         self.spo2_n = self.normalize(self.spo2)
         self.flow_n = self.normalize(self.flow)
         self.print_airflow_dominant_period()
-        self.detect_apnea_events()  # <-- Add this line to detect apnea events PTR ADD THIS LINE
+        self.detect_apnea_events()
+        self.update_event_count_label()  # <-- Add this line
 
     def normalize(self, series):
         range_ = series.max() - series.min()
@@ -346,7 +354,7 @@ class SleepSensePlot(QMainWindow):
             for start, end, typ in self.detected_events:
                 if end < t0 or start > t1:
                     continue
-                plot_start = max(start, t0)
+                plot_start = max(start, t0) 
                 plot_end = min(end, t1)
                 self.ax.axvspan(
                     plot_start, plot_end,
@@ -411,6 +419,7 @@ class SleepSensePlot(QMainWindow):
         self.load_data()
         self.normalize_signals()
         self.end_time = self.time.iloc[-1]
+        self.update_event_count_label()  # <-- Add this line
 
         max_slider = int((self.end_time - self.start_time - self.window_size) * 10)
         max_slider = max(max_slider, 0)
@@ -623,7 +632,20 @@ class SleepSensePlot(QMainWindow):
         # Optionally, store events for later use (e.g., plotting)
         self.detected_events = events
 
-
+    def update_event_count_label(self):
+        hsa_count = csa_count = osa_count = 0
+        if hasattr(self, "detected_events"):
+            for _, _, typ in self.detected_events:
+                if typ == "HSA":
+                    hsa_count += 1
+                elif typ == "CSA":
+                    csa_count += 1
+                elif typ == "OSA":
+                    osa_count += 1
+        self.event_count_label.setText(
+            f"<b>Event Counts (Full Data):</b><br>"
+            f"HSA: {hsa_count}<br>CSA: {csa_count}<br>OSA: {osa_count}"
+        )
 
 
 if __name__ == "__main__":
