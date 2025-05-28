@@ -21,7 +21,7 @@ class DataChangeHandler(FileSystemEventHandler):
         self.plot_window = plot_window
 
     def on_modified(self, event):
-        if event.src_path.endswith("DATA1131.TXT"):
+        if event.src_path.endswith(r"C:\Users\DELL\Documents\GitHub\gui\Clutter\DATA2245 copy.TXT"):
             print("Data file changed, reloading...")
             QTimer.singleShot(0, self.plot_window.reload_data)
 
@@ -31,7 +31,7 @@ class SleepSensePlot(QMainWindow):
         super().__init__()
         self.setWindowTitle("Developer Mode - Sleepsense Plotting")
 
-        self.file_path = "DATA1131.TXT"
+        self.file_path = r"C:\Users\DELL\Documents\GitHub\gui\Clutter\DATA2245 copy.TXT"
         self.load_data()
         self.normalize_signals()
 

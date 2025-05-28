@@ -22,7 +22,7 @@ class DataChangeHandler(FileSystemEventHandler):
         self.plot_window = plot_window
 
     def on_modified(self, event):
-        if event.src_path.endswith("DATA1131.TXT"):
+        if event.src_path.endswith("DATA2245.TXT"):
             print("Data file changed, reloading...")
             QTimer.singleShot(0, self.plot_window.reload_data)
 
@@ -30,9 +30,9 @@ class DataChangeHandler(FileSystemEventHandler):
 class SleepSensePlot(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Developer Mode - Sleepsense Plotting")
+        self.setWindowTitle("Developer Mode - Sleepsense Plotting") 
 
-        self.file_path = "DATA1131.TXT"
+        self.file_path = "DATA2245.TXT"
         self.load_data()
         self.normalize_signals()
 
@@ -64,12 +64,6 @@ class SleepSensePlot(QMainWindow):
             timeframe_layout.addWidget(btn)
         right_layout.addLayout(timeframe_layout)
 
-        # Event summary panel
-        self.event_summary_label = QLabel("CSA: 0, OSA: 0, HSA: 0")
-        self.event_summary_label.setFont(QFont("Arial", 12))
-        self.event_summary_label.setAlignment(Qt.AlignCenter)
-        right_layout.addWidget(self.event_summary_label)
-
         # Summary signal plot (make it smaller)
         self.summary_canvas = FigureCanvas(Figure(figsize=(16, 2)))
         self.summary_ax = self.summary_canvas.figure.subplots()
@@ -79,7 +73,7 @@ class SleepSensePlot(QMainWindow):
         # Signal selector layout
         signal_selection_layout = QHBoxLayout()
         signal_label = QLabel(" Mahol pura wavyyyyyy")
-        signal_label.setFont(QFont("Bold", 10))
+        signal_label.setFont(QFont("Bold", 13))
         signal_selection_layout.addWidget(signal_label)
 
         self.signal_selector = QComboBox()
@@ -91,7 +85,7 @@ class SleepSensePlot(QMainWindow):
         right_layout.addLayout(signal_selection_layout)
 
         # Main signal plot (make it bigger)
-        self.canvas = FigureCanvas(Figure(figsize=(74, 34)))  # Increased size
+        self.canvas = FigureCanvas(Figure(figsize=(98, 66)))  # Increased size not working will see baad mai
         self.ax = self.canvas.figure.subplots()
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
@@ -193,27 +187,24 @@ class SleepSensePlot(QMainWindow):
         self.spo2 = self.data[3].astype(float)
         self.flow = self.data[7].astype(float)
 
-        # Print max and min value of airflow
-        print(f"Airflow max: {self.flow.max()}, min: {self.flow.min()}")
-
-        # Print most repeated (mode) value of airflow
-        mode = self.flow.mode()
-        if not mode.empty:
-            print(f"Most repeated (mode) value in Airflow: {mode.iloc[0]}")
-        else:
-            print("No mode found in Airflow.")
+        # Print how many times each value occurs in Airflow
+        targets = [70, 60, 50, 40, 30,20, 15,14,13,12,11,10,7,5,4,3,2,1,8,6,9]
+        for target in targets:
+            count = np.sum(self.flow == target)
+            print(f"Airflow value {target} occurs {count} times")
 
     def normalize_signals(self):
         self.body_pos_n = self.normalize(self.body_pos)
         self.pulse_n = self.normalize(self.pulse)
         self.spo2_n = self.normalize(self.spo2)
         self.flow_n = self.normalize(self.flow)
+        self.print_airflow_dominant_period()  # Add this line
 
     def normalize(self, series):
         range_ = series.max() - series.min()
         if range_ == 0:
             return series * 0
-        return (series - series.min()) / range_
+        return (series - series.min()) / range_  
 
     def plot_summary_signal(self):
         self.summary_ax.clear()
@@ -227,17 +218,18 @@ class SleepSensePlot(QMainWindow):
             return
 
         # Smooth the signal with a moving average
-        window_size = 10  # Adjust for more/less smoothing
+        window_size = 10
         if len(signal) > window_size:
             signal = pd.Series(signal).rolling(window=window_size, min_periods=1, center=True).mean()
 
-        # Make Airflow line extra thin and light in overview
-        if self.summary_signal == "Airflow":
-            lw = 0.2
-            color = "#0a2be4"  # lighter blue
-        else:
-            lw = 0.5
-            color = "blue"
+        # Use lighter colors and thinner lines
+        color_map = {
+            "Pulse": "#ffb3b3",    # light red
+            "SpO2": "#b3ffb3",     # light green
+            "Airflow": "#b3d1ff"   # light blue
+        }
+        lw = 0.7  # thinner line
+        color = color_map.get(self.summary_signal, "gray")
 
         self.summary_ax.plot(self.time, signal, label=self.summary_signal, color=color, linewidth=lw)
 
@@ -262,17 +254,6 @@ class SleepSensePlot(QMainWindow):
         self.visible_signals[signal_name] = visible
         self.plot_signals()
 
-    def calculate_event_counts(self, flow_segment):
-        csa_threshold = 0.2
-        osa_threshold = 0.5
-        hsa_threshold = 0.8
-
-        csa_count = np.sum(flow_segment < csa_threshold)
-        osa_count = np.sum((flow_segment >= csa_threshold) & (flow_segment < osa_threshold))
-        hsa_count = np.sum((flow_segment >= osa_threshold) & (flow_segment < hsa_threshold))
-
-        return csa_count, osa_count, hsa_count
-
     def bandpass_filter(self, data, lowcut, highcut, fs, order=4):
         nyq = 0.5 * fs
         low = lowcut / nyq
@@ -280,6 +261,12 @@ class SleepSensePlot(QMainWindow):
         b, a = butter(order, [low, high], btype='band')
         y = filtfilt(b, a, data)
         return y
+
+    def downsample(x, y, max_points=2000):
+        if len(x) > max_points:
+            idx = np.linspace(0, len(x) - 1, max_points, dtype=int)
+            return x.iloc[idx] if hasattr(x, 'iloc') else x[idx], y.iloc[idx] if hasattr(y, 'iloc') else y[idx]
+        return x, y
 
     def plot_signals(self):
         self.ax.clear()
@@ -299,7 +286,6 @@ class SleepSensePlot(QMainWindow):
         if self.visible_signals.get('Body Position', False):
             body_pos_segment = self.body_pos[mask]
             t_segment = t.reset_index(drop=True)
-            # Calculate how many images to show (100 per minute)
             n_points = int(self.window_size * 100 / 60)
             n_points = max(1, n_points)
             indices = np.linspace(0, len(body_pos_segment) - 1, n_points, dtype=int) if len(body_pos_segment) > 0 else []
@@ -315,15 +301,15 @@ class SleepSensePlot(QMainWindow):
                 if img_file:
                     try:
                         img = mpimg.imread(img_file)
-                        img_width = 0.30  # fixed time width
-                        img_height = 0.30  # fixed vertical height (adjust as needed)
+                        img_width = 0.30
+                        img_height = 0.30
                         y_bottom = offset['Body Position']
                         extent = [t_segment.iloc[i], t_segment.iloc[i] + img_width, y_bottom, y_bottom + img_height]
                         self.ax.imshow(img, aspect='auto', extent=extent)
                     except FileNotFoundError:
                         print(f"Image file '{img_file}' not found. Please check the path.")
 
-        window_size = 10  # Smoothing window for all signals
+        window_size = 10
 
         if self.visible_signals.get('Pulse', False):
             pulse = self.pulse_n[mask] * self.scales['Pulse']
@@ -337,41 +323,25 @@ class SleepSensePlot(QMainWindow):
             self.ax.plot(t, spo2 + offset['SpO2'], label="SpO2", color="green", linewidth=2.0)
         if self.visible_signals.get('Airflow', False):
             flow = self.flow_n[mask] * self.scales['Airflow']
-
-            # Strong smoothing to enhance sinusoidal appearance
-            smooth_window = 300  # Try 200, 300, 400 for more smoothing
+            smooth_window = 1000
             if len(flow) > smooth_window:
                 flow_smooth = pd.Series(flow).rolling(window=smooth_window, min_periods=1, center=True).mean()
             else:
                 flow_smooth = flow
 
-            # Optional: Detrend to remove slow baseline drift
-            trend_window = 1000  # Should be much larger than smooth_window
-            if len(flow) > trend_window:
-                trend = pd.Series(flow).rolling(window=trend_window, min_periods=1, center=True).mean()
-                flow_smooth = flow_smooth - trend + np.mean(trend)
+            lower = np.percentile(flow_smooth, 1)
+            upper = np.percentile(flow_smooth, 99)
+            flow_smooth = np.clip(flow_smooth, lower, upper)
 
-            # Optionally, set values above 4 to zero
-            flow_smooth = np.where(flow_smooth > 4, 0, flow_smooth)
+            flow_display = flow_smooth
+            lower = np.percentile(flow_display, 1)
+            upper = np.percentile(flow_display, 99)
+            flow_display = np.clip(flow_display, lower, upper)
 
-            # Estimate sampling frequency (fs)
-            if len(t) > 1:
-                fs = 1 / np.median(np.diff(t))
-                # Bandpass filter between 0.1 Hz and 0.5 Hz (adjust as needed)
-                flow_filtered = self.bandpass_filter(flow, 0.1, 0.5, fs)
-                self.ax.plot(t, flow_filtered + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
-            else:
-                self.ax.plot(t, flow + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
-
-            csa_count, osa_count, hsa_count = self.calculate_event_counts(flow)
-            event_summary = f"CSA: {csa_count}, OSA: {osa_count}, HSA: {hsa_count}"
-            self.ax.text(0.02, 0.95, event_summary, transform=self.ax.transAxes, fontsize=10, color="black")
-
-            # Update event summary label
-            self.event_summary_label.setText(event_summary)
+            self.ax.plot(t, flow_display + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
 
         self.ax.set_xlim(t0, t1)
-        self.ax.set_ylim(-0.5,9)
+        self.ax.set_ylim(-0.5, 12)
         self.ax.set_title("Developer Mode ")
         self.ax.grid(True, linestyle='--', alpha=0.5)
 
@@ -456,7 +426,7 @@ class SleepSensePlot(QMainWindow):
                         except FileNotFoundError:
                             pass
 
-            window_size = 10
+            window_size = 17
             # Plot signals
             if self.visible_signals.get('Pulse', False):
                 pulse = self.pulse_n[mask] * self.scales['Pulse']
@@ -470,28 +440,24 @@ class SleepSensePlot(QMainWindow):
                 ax_main.plot(t, spo2 + offset['SpO2'], label="SpO2", color="green", linewidth=2.0)
             if self.visible_signals.get('Airflow', False):
                 flow = self.flow_n[mask] * self.scales['Airflow']
-
-                # Strong smoothing to enhance sinusoidal appearance
-                smooth_window = 300  # Try 200, 300, 400 for more smoothing
+                smooth_window = 1000  # Try 1000 or higher for more smoothing
                 if len(flow) > smooth_window:
                     flow_smooth = pd.Series(flow).rolling(window=smooth_window, min_periods=1, center=True).mean()
                 else:
                     flow_smooth = flow
 
-                # Optional: Detrend to remove slow baseline drift
-                trend_window = 1000  # Should be much larger than smooth_window
-                if len(flow) > trend_window:
-                    trend = pd.Series(flow).rolling(window=trend_window, min_periods=1, center=True).mean()
-                    flow_smooth = flow_smooth - trend + np.mean(trend)
+                # Clip outliers before scaling
+                lower = np.percentile(flow_smooth, 1)
+                upper = np.percentile(flow_smooth, 99)
+                flow_smooth = np.clip(flow_smooth, lower, upper)
 
-                # Optionally, set values above 4 to zero
-                flow_smooth = np.where(flow_smooth > 4, 0, flow_smooth)
+                # Only smooth and clip outliers, do not rescale to a fixed range
+                flow_display = flow_smooth  # Already multiplied by self.scales['Airflow']
+                lower = np.percentile(flow_display, 1)
+                upper = np.percentile(flow_display, 99)
+                flow_display = np.clip(flow_display, lower, upper)
 
-                ax_main.plot(t, flow_smooth + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
-
-                csa_count, osa_count, hsa_count = self.calculate_event_counts(flow)
-                event_summary = f"CSA: {csa_count}, OSA: {osa_count}, HSA: {hsa_count}"
-                ax_main.text(0.02, 0.95, event_summary, transform=ax_main.transAxes, fontsize=10, color="black")
+                ax_main.plot(t, flow_display + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
 
             ax_main.set_xlim(t0, t1)
             ax_main.set_ylim(-0.5, 5.5)
@@ -548,6 +514,31 @@ class SleepSensePlot(QMainWindow):
         new_scale = max(0.2, min(5.0, self.scales[signal_name] + delta))
         self.scales[signal_name] = new_scale
         self.plot_signals()
+
+    def print_airflow_dominant_period(self):
+        # Use a strongly smoothed version of the normalized Airflow data
+        smooth_window = 300
+        flow = self.flow_n
+        if len(flow) > smooth_window:
+            flow_smooth = pd.Series(flow).rolling(window=smooth_window, min_periods=1, center=True).mean()
+        else:
+            flow_smooth = flow
+
+        # Find zero-crossings (from negative to positive)
+        zero_crossings = np.where(np.diff(np.sign(flow_smooth - np.mean(flow_smooth))) > 0)[0]
+        if len(zero_crossings) > 1:
+            # Calculate intervals in seconds
+            intervals = np.diff(self.time.iloc[zero_crossings])
+            # Find the most frequent interval (mode)
+            if len(intervals) > 0:
+                mode_interval = pd.Series(intervals).mode().iloc[0]
+                print(f"Most frequent Airflow period (seconds): {mode_interval:.2f}")
+            else:
+                print("Not enough intervals to determine period.")
+        else:
+            print("Not enough zero-crossings to determine period.")
+
+
 
 
 if __name__ == "__main__":

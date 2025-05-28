@@ -3,195 +3,136 @@ import pandas as pd
 import numpy as np
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QSlider,
-    QPushButton, QHBoxLayout, QLabel
+    QPushButton, QHBoxLayout, QLabel, QComboBox, QSizePolicy, QFileDialog
 )
 from PyQt5.QtCore import Qt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-
-class SleepSensePlot(QMainWindow):
+class SleepApneaApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Dev Mode - Sleepsense Plotting")
+        self.setWindowTitle("Sleep Apnea Detection Software")
 
-        # Load data (adjust path)
-        file_path = r"C:\Users\DELL\Documents\Workday1\sleepsense\DATA2304.TXT"
-        self.data = pd.read_csv(file_path, header=None)
-        self.time = self.data[0].astype(float) / 1000  # ms to s
+        self.file_path = "DATA2245.TXT"  # Set your data file path here
+        self.load_data()
+        self.normalize_signals()
+
+        self.window_size = 10  # default seconds
+        self.window_start = self.time.iloc[0]
+        self.init_ui()
+        self.plot_signals()
+
+    def load_data(self):
+        self.data = pd.read_csv(self.file_path, header=None)
+        self.time = self.data[0].astype(float) / 1000  # or just .astype(float) if not ms
         self.body_pos = self.data[1].astype(int)
         self.pulse = self.data[2].astype(float)
         self.spo2 = self.data[3].astype(float)
-        self.flow = self.data[7].astype(float)
+        self.airflow = self.data[7].astype(float)
 
-        # Normalize signals
-        self.body_pos_n = self.normalize(self.body_pos)
-        self.pulse_n = self.normalize(self.pulse)
-        self.spo2_n = self.normalize(self.spo2)
-        self.flow_n = self.normalize(self.flow)
+    def normalize_signals(self):
+        self.airflow_n = (self.airflow - self.airflow.min()) / (self.airflow.max() - self.airflow.min())
+        self.spo2_n = (self.spo2 - self.spo2.min()) / (self.spo2.max() - self.spo2.min())
+        self.pulse_n = (self.pulse - self.pulse.min()) / (self.pulse.max() - self.pulse.min())
 
-        # Window settings
-        self.start_time = self.time.iloc[0]
-        self.end_time = self.time.iloc[-1]
+    def detect_apnea_events(self, t, airflow, min_duration_sec=10, fs=10):
+        # Example thresholds for normalized airflow
+        csa_thresh = 0.2
+        osa_thresh = 0.5
+        hsa_thresh = 0.7
+        min_samples = int(min_duration_sec * fs)
+        events = {'CSA': [], 'OSA': [], 'HSA': []}
+        below = airflow < csa_thresh
+        csa_starts = np.where(np.diff(np.concatenate(([0], below.astype(int)))) == 1)[0]
+        csa_ends = np.where(np.diff(np.concatenate((below.astype(int), [0]))) == -1)[0]
+        for start, end in zip(csa_starts, csa_ends):
+            if end - start >= min_samples:
+                events['CSA'].append((t.iloc[start], t.iloc[end-1]))
+        below = (airflow < osa_thresh) & (airflow >= csa_thresh)
+        osa_starts = np.where(np.diff(np.concatenate(([0], below.astype(int)))) == 1)[0]
+        osa_ends = np.where(np.diff(np.concatenate((below.astype(int), [0]))) == -1)[0]
+        for start, end in zip(osa_starts, osa_ends):
+            if end - start >= min_samples:
+                events['OSA'].append((t.iloc[start], t.iloc[end-1]))
+        below = (airflow < hsa_thresh) & (airflow >= osa_thresh)
+        hsa_starts = np.where(np.diff(np.concatenate(([0], below.astype(int)))) == 1)[0]
+        hsa_ends = np.where(np.diff(np.concatenate((below.astype(int), [0]))) == -1)[0]
+        for start, end in zip(hsa_starts, hsa_ends):
+            if end - start >= min_samples:
+                events['HSA'].append((t.iloc[start], t.iloc[end-1]))
+        return events
 
-        self.window_size = 10.0  # initial window size in seconds
-        self.min_window_size = 1.0
-        self.max_window_size = (self.end_time - self.start_time) / 2
-
-        # Arrow directions for body positions
-        self.arrow_directions = {
-            0: (0, 0.5, '↑', 'Up (Supine)'),
-            1: (-0.5, 0, '←', 'Left'),
-            2: (0.5, 0, '→', 'Right'),
-            3: (0, -0.5, '↓', 'Down (Prone)')
-        }
-
-        self.offsets = [0, 1.2, 2.4, 3.6]
-
-        self.initUI()
-
-    def normalize(self, series):
-        return (series - series.min()) / (series.max() - series.min())
-
-    def initUI(self):
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+    def init_ui(self):
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
         layout = QVBoxLayout()
-        central_widget.setLayout(layout)
-
-        # Matplotlib Figure & Canvas
-        self.fig = Figure(figsize=(14, 8))
-        self.canvas = FigureCanvas(self.fig)
+        # Timeframe buttons
+        timeframe_layout = QHBoxLayout()
+        for label, sec in [("5s", 5), ("10s", 10), ("15s", 15), ("30s", 30), ("1m", 60), ("2m", 120)]:
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda _, s=sec: self.set_window_size(s))
+            timeframe_layout.addWidget(btn)
+        layout.addLayout(timeframe_layout)
+        # Matplotlib canvas
+        self.canvas = FigureCanvas(Figure(figsize=(10, 6)))
+        self.ax = self.canvas.figure.subplots()
         layout.addWidget(self.canvas)
-
-        self.ax = self.fig.add_subplot(111)
-        self.fig.subplots_adjust(bottom=0.2, top=0.85)
-
-        # Slider layout
-        slider_layout = QHBoxLayout()
-        layout.addLayout(slider_layout)
-
-        slider_label = QLabel("Time:")
-        slider_layout.addWidget(slider_label)
-
+        # Slider
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setMinimum(0)
-        self.slider.setMaximum(int((self.end_time - self.start_time - self.window_size) * 100))
-        self.slider.setValue(0)
-        self.slider.setTickInterval(100)
-        self.slider.setSingleStep(1)
+        self.slider.setMaximum(100)
         self.slider.valueChanged.connect(self.update_plot)
-        slider_layout.addWidget(self.slider)
+        layout.addWidget(self.slider)
+        self.central_widget.setLayout(layout)
 
-        # Zoom buttons (+ and -)
-        zoom_layout = QHBoxLayout()
-        layout.addLayout(zoom_layout)
+    def set_window_size(self, seconds):
+        self.window_size = seconds
+        self.update_plot(self.slider.value())
 
-        zoom_out_btn = QPushButton("-")
-        zoom_out_btn.setFixedWidth(40)
-        zoom_out_btn.clicked.connect(self.zoom_out)
-        zoom_layout.addWidget(zoom_out_btn)
-
-        zoom_in_btn = QPushButton("+")
-        zoom_in_btn.setFixedWidth(40)
-        zoom_in_btn.clicked.connect(self.zoom_in)
-        zoom_layout.addWidget(zoom_in_btn)
-
-        # Fixed window size buttons
-        fixed_size_layout = QHBoxLayout()
-        layout.addLayout(fixed_size_layout)
-
-        self.window_sizes = [5, 10, 15, 30, 60, 120, 300]
-        for size in self.window_sizes:
-            label = f"{size//60}m" if size >= 60 else f"{size}s"
-            btn = QPushButton(label)
-            btn.clicked.connect(lambda _, s=size: self.change_window_size(s))
-            fixed_size_layout.addWidget(btn)
-
+    def update_plot(self, value):
+        self.window_start = self.time.iloc[0] + value
         self.plot_signals()
-        self.update_plot()
 
     def plot_signals(self):
         self.ax.clear()
+        t0 = self.window_start
+        t1 = t0 + self.window_size
+        mask = (self.time >= t0) & (self.time <= t1)
+        t = self.time[mask]
+        airflow = self.airflow_n[mask]
+        spo2 = self.spo2_n[mask]
+        pulse = self.pulse_n[mask]
+        body_pos = self.body_pos[mask]
+        # Plot signals
+        self.ax.plot(t, airflow + 2, label="Airflow", color="blue")
+        self.ax.plot(t, spo2 + 1, label="SpO2", color="green")
+        self.ax.plot(t, pulse, label="Pulse", color="red")
+        # Show body position as text
+        pos_labels = {0: "Supine", 1: "Left", 2: "Right", 3: "Up", 4: "Down"}
+        for idx, pos in zip(t, body_pos):
+            self.ax.text(idx, -0.2, pos_labels.get(pos, ""), fontsize=8, rotation=90)
+        # Detect and mark apnea events
+        fs = 10  # Adjust to your sampling rate
+        events = self.detect_apnea_events(t, airflow, min_duration_sec=10, fs=fs)
 
-        # Plot normalized signals with offsets
-        self.ax.plot(self.time, self.body_pos_n + self.offsets[0], color='black', label='Body Position')
-        self.ax.plot(self.time, self.pulse_n + self.offsets[1], color='red', label='Pulse')
-        self.ax.plot(self.time, self.spo2_n + self.offsets[2], color='green', label='SpO2')
-        self.ax.plot(self.time, self.flow_n + self.offsets[3], color='black', label='Airflow')
-
-        # Y-axis labels
-        yticks_pos = [np.mean(sig) + offset for sig, offset in zip(
-            [self.body_pos_n, self.pulse_n, self.spo2_n, self.flow_n], self.offsets)]
-        yticks_labels = ['Body Position', 'Pulse (BPM)', 'SpO2 (%)', 'Airflow']
-        self.ax.set_yticks(yticks_pos)
-        self.ax.set_yticklabels(yticks_labels, fontsize=12)
-        self.ax.set_ylim(-0.5, max(self.offsets) + 1)
-        self.ax.set_xlabel('Time (s)')
-        self.ax.set_title('Dev Mode - Sleepsense Plotting with Body Position Arrows')
-
-        # Add arrows for body position
-        arrow_y = self.offsets[0] + 0.5
-        interval = 5  # seconds between arrows
-        dt = self.time.iloc[1] - self.time.iloc[0]
-        sampling_step = max(int(interval / dt), 1)
-        arrow_times = self.time[::sampling_step]
-
-        for t in arrow_times:
-            idx = (np.abs(self.time - t)).argmin()
-            pos = self.body_pos.iloc[idx]
-            dx, dy, arrow_char, label = self.arrow_directions.get(pos, (0, 0, '?', 'Unknown'))
-            self.ax.annotate(
-                arrow_char,
-                xy=(self.time.iloc[idx], arrow_y),
-                xytext=(self.time.iloc[idx] + dx, arrow_y + dy),
-                fontsize=16,
-                color='blue',
-                ha='center',
-                va='center',
-                arrowprops=dict(arrowstyle='->', color='green')
-            )
-
-    def update_plot(self):
-        slider_val = self.slider.value() / 100  # slider scaled to seconds
-        # Clamp slider max to avoid window overflow
-        max_start = self.end_time - self.window_size
-        start = self.start_time + min(slider_val, max_start - self.start_time)
-        end = start + self.window_size
-        self.ax.set_xlim(start, end)
+        first_csa = True
+        first_osa = True
+        first_hsa = True
+        for start, end in events['CSA']:
+            self.ax.axvspan(start, end, color='blue', alpha=0.2, label='CSA' if first_csa else "")
+            first_csa = False
+        for start, end in events['OSA']:
+            self.ax.axvspan(start, end, color='red', alpha=0.2, label='OSA' if first_osa else "")
+            first_osa = False
+        for start, end in events['HSA']:
+            self.ax.axvspan(start, end, color='orange', alpha=0.2, label='HSA' if first_hsa else "")
+            first_hsa = False
+        self.ax.legend()
         self.canvas.draw_idle()
-
-    def change_window_size(self, size):
-        self.window_size = float(size)
-        self.window_size = max(self.min_window_size, min(self.window_size, self.max_window_size))
-        max_slider_val = int((self.end_time - self.start_time - self.window_size) * 100)
-        self.slider.setMaximum(max_slider_val)
-        if self.slider.value() > max_slider_val:
-            self.slider.setValue(max_slider_val)
-        else:
-            self.update_plot()
-
-    def zoom_in(self):
-        new_size = self.window_size / 1.5  # zoom in by reducing window size
-        if new_size < self.min_window_size:
-            new_size = self.min_window_size
-        self.window_size = new_size
-        max_slider_val = int((self.end_time - self.start_time - self.window_size) * 100)
-        self.slider.setMaximum(max_slider_val)
-        self.update_plot()
-
-    def zoom_out(self):
-        new_size = self.window_size * 1.5  # zoom out by increasing window size
-        if new_size > self.max_window_size:
-            new_size = self.max_window_size
-        self.window_size = new_size
-        max_slider_val = int((self.end_time - self.start_time - self.window_size) * 100)
-        self.slider.setMaximum(max_slider_val)
-        self.update_plot()
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    win = SleepSensePlot()
-    win.show()
+    window = SleepApneaApp()
+    window.show()
     sys.exit(app.exec_())
