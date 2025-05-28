@@ -44,6 +44,9 @@ class SleepSensePlot(QMainWindow):
         self.summary_signal = 'Pulse'
 
         self.visible_signals = {'Body Position': True, 'Pulse': True, 'SpO2': True, 'Airflow': True}
+        
+        self.detected_windows = {'CSA': [], 'OSA': [], 'HSA': []}
+        self.selected_event    = "None"
 
         self.init_ui()
         self.start_file_watcher()
@@ -69,6 +72,18 @@ class SleepSensePlot(QMainWindow):
         self.summary_ax = self.summary_canvas.figure.subplots()
         self.summary_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         right_layout.addWidget(self.summary_canvas, stretch=1)
+        
+        self.apnea_type_combo = QComboBox()
+        self.apnea_type_combo.addItems(["CSA", "OSA", "HSA"])
+        self.apnea_type_combo.setFixedWidth(100)
+        right_layout.addWidget(QLabel("Apnea Type:"))
+        right_layout.addWidget(self.apnea_type_combo)
+        
+        # after you build self.signal_selector, add:
+        self.auto_detect_btn = QPushButton("Auto Detect")
+        self.auto_detect_btn.setFont(QFont("Arial",12,QFont.Bold))
+        self.auto_detect_btn.clicked.connect(self.on_auto_detect)
+        right_layout.addWidget(self.auto_detect_btn)
 
         # Signal selector layout
         signal_selection_layout = QHBoxLayout()
@@ -178,6 +193,22 @@ class SleepSensePlot(QMainWindow):
         checkbox.toggled.connect(lambda checked, sig=signal_name: self.toggle_signal(sig, checked))
         self.toggle_checkboxes[signal_name] = checkbox
         return checkbox
+    
+    def on_auto_detect(self):
+        # read dropdown
+        evt = self.apnea_type_combo.currentText()   # “CSA”, “OSA” or “HSA”
+        self.selected_event = evt
+
+        # run detector and pull out windows
+        results = self.calculate_event_counts()
+        self.detected_windows = {
+            'CSA': results['CSA']['windows'],
+            'OSA': results['OSA']['windows'],
+            'HSA': results['HSA']['windows'],
+        }
+
+        # redraw with highlights
+        self.plot_signals()
 
     def load_data(self):
         self.data = pd.read_csv(self.file_path, header=None)
@@ -191,7 +222,7 @@ class SleepSensePlot(QMainWindow):
         targets = [70, 60, 50, 40, 30,20, 15,14,13,12,11,10,7,5,4,3,2,1,8,6,9]
         for target in targets:
             count = np.sum(self.flow == target)
-            print(f"Airflow value {target} occurs {count} times")
+            # print(f"Airflow value {target} occurs {count} times")
 
     def normalize_signals(self):
         self.body_pos_n = self.normalize(self.body_pos)
@@ -253,6 +284,136 @@ class SleepSensePlot(QMainWindow):
     def toggle_signal(self, signal_name, visible):
         self.visible_signals[signal_name] = visible
         self.plot_signals()
+        
+    def calculate_event_counts(self):
+        btp = self.flow.values.astype(int)
+        
+        np.set_printoptions(suppress=True, precision=2)
+        time = self.time.values.astype(float)
+        
+        # max_btp = int(self.flow.max())
+        # min_btp = int(self.flow.min())
+        # print(f"Airflow max: {max_btp}, min: {min_btp}")
+        
+        # max_btp1 = int(self.flow.max() - 10)
+        # max_btp2 = int(self.flow.max() - 20)
+        # max_btp3 = int(self.flow.max() - 30)
+        # max_btp4 = int(self.flow.max() - 40)
+        # max_btp5 = int(self.flow.max() - 50)
+        # max_btp_test = int(self.flow.max() - 55)
+        # max_btp6 = int(self.flow.max() - 60)
+        # max_btp7 = int(self.flow.max() - 65)
+        
+        # max_btp_count = (self.flow == max_btp).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp1).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp1} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp2).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp2} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp3).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp3} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp4).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp4} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp5).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp5} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp_test).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp_test} occurred {max_btp_count} times")
+        
+        # max_btp_count = (self.flow == max_btp6).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp6} occurred {max_btp_count} times")
+        # max_btp_count = (self.flow == max_btp7).sum()
+        # print(f"Pratyaksh Maximum value: {max_btp7} occurred {max_btp_count} times")
+        
+        best_max = None
+        best_min = None
+        
+        vc = self.flow.value_counts()
+        
+        max_btp = int(self.flow.max())
+        min_btp = int(self.flow.min())
+        max_candidates = [max_btp - i*10 for i in range(8)]
+        min_candidates = [min_btp + i*10 for i in range(8)]
+        max_cands = [v for v in max_candidates if v in vc.index]
+        min_cands = [v for v in min_candidates if v in vc.index]
+        best_max = max(max_cands, key=lambda v: vc[v]) if max_cands else max_btp
+        best_min = max(min_cands, key=lambda v: vc[v]) if min_cands else min_btp
+        
+        print(f"PT Max BTP: {max_btp}, Min BTP: {min_btp}")
+        print(f"Best Max BTP: {best_max}, Best Min BTP: {best_min}")
+        
+        btp_modified = np.where(btp > best_max, 0, btp)
+        
+        csa_thresh = int(0.10 * best_max + best_min)
+        osa_thresh = int(0.50 * best_max + best_min)
+        hsa_thresh = int(0.80 * best_max + best_min)
+        
+        print(f"CSA threshold: {csa_thresh}, OSA threshold: {osa_thresh}, HSA threshold: {hsa_thresh}")
+        
+        csa_count = osa_count = hsa_count = 0
+        csa_blocks, osa_blocks, hsa_blocks = [], [], []
+        csa_windows, osa_windows, hsa_windows = [], [], []
+        
+        print("BTP values modified:", btp_modified)
+
+        total_samples = len(btp)
+
+        # 1. CSA: 30-sample window (10s)
+        csa_window = 30
+        for i in range(0, total_samples, csa_window):
+            block = btp_modified[i:i + csa_window]
+            if len(block) < csa_window:
+                break
+            time_counts = [(j // 3) + 1 for j in range(len(block))]  # [1..10]
+            # print("CSA block", block)
+            if np.all((block > best_min) & (block <= csa_thresh)):
+                csa_count += 1
+                csa_blocks.append((time_counts, block.tolist()))
+                start_ms = round(time[i], 2)
+                end_ms   = round(time[i+29], 2)
+                print(f"CSA block: {block}, start: {start_ms}, end: {end_ms}")
+                csa_windows.append((start_ms, end_ms))
+
+        # 2. OSA: 15-sample window (5s)
+        osa_window = 15
+        for i in range(0, total_samples, osa_window):
+            block = btp_modified[i:i + osa_window]
+            if len(block) < osa_window:
+                break
+            time_counts = [(j // 3) + 1 for j in range(len(block))]  # [1..5]
+            # print("OSA block", block)
+            if np.all((block > csa_thresh) & (block <= osa_thresh)):
+                osa_count += 1
+                osa_blocks.append((time_counts, block.tolist()))
+                start_ms = round(time[i], 2)
+                end_ms   = round(time[i+14], 2)
+                print(f"OSA block: {block}, start: {start_ms}, end: {end_ms}")
+                osa_windows.append((start_ms, end_ms))
+
+        # 3. HSA: 15-sample window (5s)
+        hsa_window = 15
+        for i in range(0, total_samples, hsa_window):
+            block = btp_modified[i:i + hsa_window]
+            if len(block) < hsa_window:
+                break
+            time_counts = [(j // 3) + 1 for j in range(len(block))]  # [1..5]
+            # print("HSA block", block)
+            if np.all((block > osa_thresh) & (block <= hsa_thresh)):
+                hsa_count += 1
+                hsa_blocks.append((time_counts, block.tolist()))
+                start_ms = round(time[i], 2)
+                end_ms   = round(time[i+14], 2)
+                print(f"HSA block: {block}, start: {start_ms}, end: {end_ms}")
+                hsa_windows.append((start_ms, end_ms))
+                
+        print(f"CSA Windows: {csa_count}")
+        print(f"OSA Windows: {osa_count}")
+        print(f"HSA Windows: {hsa_count}")
+
+        return {
+            'CSA': {'count': csa_count, 'windows': csa_windows},
+            'OSA': {'count': osa_count, 'windows': osa_windows},
+            'HSA': {'count': hsa_count, 'windows': hsa_windows},
+            }
 
     def bandpass_filter(self, data, lowcut, highcut, fs, order=4):
         nyq = 0.5 * fs
@@ -332,6 +493,13 @@ class SleepSensePlot(QMainWindow):
             lower = np.percentile(flow_smooth, 1)
             upper = np.percentile(flow_smooth, 99)
             flow_smooth = np.clip(flow_smooth, lower, upper)
+            
+            results = self.calculate_event_counts()
+            csa_count = results['CSA']['count']
+            osa_count = results['OSA']['count']
+            hsa_count = results['HSA']['count']
+            event_summary = f"CSA: {csa_count}, OSA: {osa_count}, HSA: {hsa_count}"
+            self.ax.text(0.02, 0.95, event_summary, transform=self.ax.transAxes, fontsize=10, color="black")
 
             flow_display = flow_smooth
             lower = np.percentile(flow_display, 1)
@@ -346,6 +514,50 @@ class SleepSensePlot(QMainWindow):
         self.ax.grid(True, linestyle='--', alpha=0.5)
 
         self.ax.legend(loc="upper right")
+        
+        airflow_offset = 3.6                  # same offset you plot Airflow at
+        airflow_amplitude = 1.0 * self.scales['Airflow'] 
+        
+        color_map = {
+            'CSA': 'purple',
+            'OSA': 'teal',
+            'HSA': 'darkgreen',
+        }
+        
+        if self.selected_event in self.detected_windows:
+            for start_s, end_s in self.detected_windows[self.selected_event]:
+                
+                duration = end_s - start_s
+                
+                # Ensure the highlight covers the waveform
+                rect = Rectangle(
+                    (start_s, airflow_offset - airflow_amplitude / 2),  # align with center of waveform
+                    duration,
+                    airflow_amplitude,
+                    color=color_map[self.selected_event],
+                    alpha=0.3,
+                    linewidth=0
+                )
+                self.ax.add_patch(rect)
+                
+                mid_s = (start_s + end_s) / 2
+                # self.ax.axvline(mid_s, color=color_map[self.selected_event], linestyle='--', linewidth=1.2, alpha=0.8)
+                
+                label = f"{self.selected_event}  {duration:.1f}s"
+
+                # Add label on top of the midpoint
+                self.ax.text(
+                    mid_s,
+                    airflow_offset + airflow_amplitude / 2 + 0.2,  # slightly above the waveform
+                    label,
+                    color=color_map[self.selected_event],
+                    fontsize=9,
+                    ha='center',
+                    va='bottom',
+                    fontweight='bold',
+                    bbox=dict(facecolor='white', edgecolor=color_map[self.selected_event], boxstyle='round,pad=0.3', alpha=0.6)
+                )
+        
         self.canvas.draw_idle()
         self.plot_summary_signal()
 
@@ -456,6 +668,13 @@ class SleepSensePlot(QMainWindow):
                 lower = np.percentile(flow_display, 1)
                 upper = np.percentile(flow_display, 99)
                 flow_display = np.clip(flow_display, lower, upper)
+                
+                results = self.calculate_event_counts()
+                csa_count = results['CSA']['count']
+                osa_count = results['OSA']['count']
+                hsa_count = results['HSA']['count']
+                event_summary = f"CSA: {csa_count}, OSA: {osa_count}, HSA: {hsa_count}"
+                ax_main.text(0.02, 0.95, event_summary, transform=ax_main.transAxes, fontsize=10, color="black")
 
                 ax_main.plot(t, flow_display + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
 
