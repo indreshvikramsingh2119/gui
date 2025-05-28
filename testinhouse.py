@@ -276,6 +276,18 @@ class SleepSensePlot(QMainWindow):
 
     def plot_signals(self):
         self.ax.clear()
+
+        # --- Calculate total event counts for full data ---
+        total_hsa = total_csa = total_osa = 0
+        if hasattr(self, "detected_events"):
+            for _, _, typ in self.detected_events:
+                if typ == "HSA":
+                    total_hsa += 1
+                elif typ == "CSA":
+                    total_csa += 1
+                elif typ == "OSA":
+                    total_osa += 1
+
         t0 = self.time.iloc[0]
         t1 = self.time.iloc[-1]
         mask = (self.time >= t0) & (self.time <= t1)
@@ -381,15 +393,29 @@ class SleepSensePlot(QMainWindow):
                 elif typ == "OSA":
                     osa_count += 1
 
-        stats_text = f"HSA: {hsa_count}\nCSA: {csa_count}\nOSA: {osa_count}"
-        # Always create the stats box after clearing the axes
-        self._stats_box = self.ax.text(
-            0.01, 0.98, stats_text,
+        # stats_text = f"HSA: {hsa_count}\nCSA: {csa_count}\nOSA: {osa_count}"
+        # # Always create the stats box after clearing the axes
+        # self._stats_box = self.ax.text(
+        #     0.01, 0.98, stats_text,
+        #     transform=self.ax.transAxes,
+        #     fontsize=14,
+        #     verticalalignment='top',
+        #     horizontalalignment='left',
+        #     bbox=dict(boxstyle="round,pad=0.4", facecolor="#f7f7f7", edgecolor="gray", alpha=0.8)
+        # )
+
+        # --- Add total event counts box at the top left ---
+        total_stats_text = (
+            f"Total Events\n"
+            f"HSA: {total_hsa}  CSA: {total_csa}  OSA: {total_osa}"
+        )
+        self.ax.text(
+            0.01, 0.98, total_stats_text,
             transform=self.ax.transAxes,
-            fontsize=14,
+            fontsize=13,
             verticalalignment='top',
             horizontalalignment='left',
-            bbox=dict(boxstyle="round,pad=0.4", facecolor="#f7f7f7", edgecolor="gray", alpha=0.8)
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="#e6f7ff", edgecolor="#3399cc", alpha=0.8)
         )
 
         self.ax.set_xlim(t0, t1)
@@ -752,9 +778,27 @@ def detect_apnea_events(self):
     for start, end, typ in self.detected_events:
         print(f"{typ} from {start:.1f}s to {end:.1f}s (duration: {end-start:.1f}s)")
 
+def detect_apnea_events(self):
+    # ...existing code...
+    for start, end, typ in self.detected_events:
+        print(f"{typ} from {start:.1f}s to {end:.1f}s (duration: {end-start:.1f}s)")
+    # Update left panel event count label
+    self.update_left_event_count_label()
 
-
-
+def update_left_event_count_label(self):
+    hsa_count = csa_count = osa_count = 0
+    if hasattr(self, "detected_events"):
+        for _, _, typ in self.detected_events:
+            if typ == "HSA":
+                hsa_count += 1
+            elif typ == "CSA":
+                csa_count += 1
+            elif typ == "OSA":
+                osa_count += 1
+    self.left_event_count_label.setText(
+        f"<b>Event Counts:</b><br>"
+        f"HSA: {hsa_count}<br>CSA: {csa_count}<br>OSA: {osa_count}"
+    )
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = SleepSensePlot()
