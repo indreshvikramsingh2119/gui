@@ -390,7 +390,6 @@ class SleepSensePlot(QMainWindow):
             t_segment = t.reset_index(drop=True)
             y_base = offset['Body Position'] + 0.4  # vertical position for arrows
 
-            # Map your values to arrows (adjust as needed)
             arrow_map = {
                 1: '←',  # Left
                 2: '→',  # Right
@@ -399,7 +398,7 @@ class SleepSensePlot(QMainWindow):
                 5: '⏏',  # Sitting/Other
             }
             # Plot an arrow for every 50th data point
-            for i in range(0, len(body_pos_segment), 50):  # Step through every 50th point
+            for i in range(0, len(body_pos_segment), 50):
                 pos = body_pos_segment.iloc[i]
                 arrow = arrow_map.get(pos, '?')
                 self.ax.text(
