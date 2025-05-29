@@ -3,13 +3,14 @@ import pandas as pd
 import numpy as np
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QSlider,
-    QPushButton, QHBoxLayout, QLabel, QComboBox, QCheckBox, QSizePolicy, QFileDialog
+    QPushButton, QHBoxLayout, QLabel, QComboBox, QCheckBox, QSizePolicy, QFileDialog, QInputDialog
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
+from matplotlib.widgets import RectangleSelector
 from matplotlib import image as mpimg
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -87,6 +88,24 @@ class SleepSensePlot(QMainWindow):
         self.canvas = FigureCanvas(Figure(figsize=(98, 66)))  # Increased size not working will see baad mai
         self.ax = self.canvas.figure.subplots()
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        # manual hilight for CSA, HSA, OSA events
+        self.manual_events = []
+        
+        # remove manual detect apnea event
+        self.manual_event_patches = []
+        
+        # remove auto detect apnea event
+        self.detected_event_patches = []
+        
+        self.selector = RectangleSelector(
+            self.ax,
+            self.on_select,
+            useblit=True,
+            button=[1],      # left-click only
+            minspanx=0.1,    # 0.1s min
+            interactive=True
+        )
 
         # --- Enlarged and vertically aligned toggle buttons ---
         toggle_layout = QVBoxLayout()
@@ -104,6 +123,9 @@ class SleepSensePlot(QMainWindow):
 
         # Height of the plot area in offset units
         total_height = 4.8  # (from -0.5 to 5.5, but your signals are spaced by 1.2)
+        
+        # right click button press
+        self.canvas.mpl_connect("button_press_event", self.on_mouse_click)
 
         for i, (signal, offset_val) in enumerate(signals):
             # Add vertical spacer proportional to the offset difference
@@ -196,7 +218,60 @@ class SleepSensePlot(QMainWindow):
         targets = [70, 60, 50, 40, 30,20, 15,14,13,12,11,10,7,5,4,3,2,1,8,6,9]
         for target in targets:
             count = np.sum(self.flow == target)
-            print(f"Airflow value {target} occurs {count} times")
+            # print(f"Airflow value {target} occurs {count} times")
+    
+    def on_mouse_click(self, event):
+        if event.button != 3:  # Right click only
+            return
+
+        click_x = event.xdata
+        if click_x is None:
+            return
+
+        # Find and remove the manual-detected event closest to the click
+        for item in self.manual_event_patches:
+            start, end, typ, rect, text = item
+            if start <= click_x <= end:
+                self.manual_event_patches.remove(item)
+                if (start, end, typ) in self.manual_events:
+                    self.manual_events.remove((start, end, typ))
+                rect.remove()
+                text.remove()
+                self.plot_signals()
+                return
+
+        # Find and remove the auto-detected event closest to the click
+        for item in self.detected_event_patches:
+            start, end, typ, rect, text = item
+            if start <= click_x <= end:
+                self.detected_event_patches.remove(item)
+                if hasattr(self, "detected_events") and (start, end, typ) in self.detected_events:
+                    self.detected_events.remove((start, end, typ))
+                rect.remove()
+                text.remove()
+                self.plot_signals()
+                return
+
+            
+    def on_select(self, eclick, erelease):
+        # eclick.xdata is the start, erelease.xdata is the end
+        start, end = sorted([eclick.xdata, erelease.xdata])
+
+        # ask the user what kind of event:
+        typ, ok = QInputDialog.getItem(
+            self,
+            "Apnea Detection Event",
+            "Event type:",
+            ["CSA","OSA","HSA"],
+            0,
+            False
+        )
+        if not ok:
+            return
+
+        # save it and redraw
+        self.manual_events.append((start, end, typ))
+        self.plot_signals()
 
     def normalize_signals(self):
         self.body_pos_n = self.normalize(self.body_pos)
@@ -287,6 +362,15 @@ class SleepSensePlot(QMainWindow):
                     total_csa += 1
                 elif typ == "OSA":
                     total_osa += 1
+                    
+        if hasattr(self, "manual_events"):
+            for _, _, typ in self.manual_events:
+                if typ == "HSA":
+                    total_hsa += 1
+                elif typ == "CSA":
+                    total_csa += 1
+                elif typ == "OSA":
+                    total_osa += 1
 
         t0 = self.time.iloc[0]
         t1 = self.time.iloc[-1]
@@ -348,27 +432,84 @@ class SleepSensePlot(QMainWindow):
             # upper = np.percentile(flow_smooth, 99)
             # flow_smooth = np.clip(flow_smooth, lower, upper)
 
-            # self.ax.plot(t, flow_smooth + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
-            self.ax.plot(t, self.flow_n[mask] * self.scales['Airflow'] + offset['Airflow'],  linewidth=1.0)
+            self.ax.plot(t, flow_smooth + offset['Airflow'], label="Airflow", color="#7ec8e3", linewidth=2.0)
+            
+        airflow_base = 3.6
+        bar_half = 0.3
+        colors = {"CSA":"red","OSA":"purple","HSA":"darkgreen"}
+
+        for start, end, typ in self.manual_events:
+            if end < t0 or start > t1:
+                continue
+            xs = max(start,t0); xe = min(end,t1)
+            dur = xe - xs
+
+            # draw the box at airflow level
+            rect = Rectangle(
+                (xs, airflow_base - bar_half),
+                xe - xs,
+                2*bar_half,
+                color=colors[typ],
+                alpha=0.4,
+                edgecolor="none"
+            )
+            self.ax.add_patch(rect)
+
+            # label above it
+            xm = 0.5*(xs+xe)
+            ym = airflow_base + bar_half + 0.05
+            
+            text_obj = self.ax.text(
+                xm, ym,
+                f"{typ} ({dur:.1f}s)",
+                ha="center", va="bottom",
+                fontsize=9, fontweight="bold",
+                color=colors[typ],
+                bbox=dict(facecolor="white", edgecolor=colors[typ], pad=2, alpha=0.8)
+            )
+            
+            # remove manual apnea detect event patch
+            self.manual_event_patches.append((start, end, typ, rect, text_obj))
+            
+            # remove auto apnea detect event patch
+            self.detected_event_patches.append((start, end, typ, rect, text_obj))
 
         # --- Highlight detected apnea/hypopnea events ---
         if hasattr(self, "detected_events"):
-            event_colors = {"CSA": "#ff4d4d", "OSA": "#4da6ff", "HSA": "#ffd966"}  # Red, Blue, Yellow
+            event_colors = {"CSA": "red", "OSA": "purple", "HSA": "darkgreen"}  # Red, Purple, Darkgreen
             airflow_base = 3.6  # y-offset for Airflow
             bar_half_height = 0.3  # half the thickness of the bar
+            
             for start, end, typ in self.detected_events:
                 if end < t0 or start > t1:
                     continue
                 plot_start = max(start, t0) 
                 plot_end = min(end, t1)
-                self.ax.axvspan(
-                    plot_start, plot_end,
-                    ymin=(airflow_base - bar_half_height) / 12,
-                    ymax=(airflow_base + bar_half_height) / 12,
-                    color=event_colors.get(typ, "#cccccc"),
-                    alpha=0.7,
-                    label=typ
+                duration   = plot_end - plot_start
+
+                # 1) draw a colored rectangle at the airflow level
+                rect = Rectangle(
+                    (plot_start, airflow_base - bar_half_height),
+                    plot_end - plot_start,
+                    2 * bar_half_height,
+                    color=event_colors[typ],
+                    alpha=0.5,
+                    edgecolor="none"
                 )
+                self.ax.add_patch(rect)
+
+                # 2) put the label above the top edge of that rect
+                x_mid = (plot_start + plot_end) / 2
+                y_top = airflow_base + bar_half_height + 0.05  # a little above the rect
+
+                self.ax.text(
+                    x_mid, y_top,
+                    f"{typ} ({duration:.1f}s)",
+                    ha="center", va="bottom",
+                    fontsize=9, fontweight="bold",
+                    bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray", pad=2)
+                )
+                
             # To avoid duplicate legend entries
             handles, labels = self.ax.get_legend_handles_labels()
             unique = dict(zip(labels, handles))
@@ -651,7 +792,7 @@ class SleepSensePlot(QMainWindow):
         csa_window = 30
         for i in range(0, total_samples, csa_window):
             block = btp_modified[i:i + csa_window]
-            print(f"CSA Block {block}")
+            # print(f"CSA Block {block}")
             if len(block) < csa_window:
                 break
             if np.all((block > best_min) & (block <= csa_thresh)):
@@ -664,7 +805,7 @@ class SleepSensePlot(QMainWindow):
         osa_window = 15
         for i in range(0, total_samples, osa_window):
             block = btp_modified[i:i + osa_window]
-            print(f"OSA Block {block}")
+            # print(f"OSA Block {block}")
             if len(block) < osa_window:
                 break
             if np.all((block > csa_thresh) & (block <= osa_thresh)):
@@ -677,7 +818,7 @@ class SleepSensePlot(QMainWindow):
         hsa_window = 15
         for i in range(0, total_samples, hsa_window):
             block = btp_modified[i:i + hsa_window]
-            print(f"HSA Block {block}")
+            # print(f"HSA Block {block}")
             if len(block) < hsa_window:
                 break
             if np.all((block > osa_thresh) & (block <= hsa_thresh)):
@@ -757,6 +898,29 @@ def detect_apnea_events(self):
     print("Detected Apnea/Hypopnea Events:")
     for start, end, typ in self.detected_events:
         print(f"{typ} from {start:.1f}s to {end:.1f}s (duration: {end-start:.1f}s)")
+
+    """
+    Uses block-based logic to detect CSA, OSA, HSA events.
+    """
+    results = self.calculate_event_counts()
+    self.detected_events = []
+    for typ in ['CSA', 'OSA', 'HSA']:
+        for start, end in results[typ]['windows']:
+            self.detected_events.append((start, end, typ))
+    # Print counts for all event types
+    print(f"Total CSA events in data: {results['CSA']['count']}")
+    print(f"Total OSA events in data: {results['OSA']['count']}")
+    print(f"Total HSA events in data: {results['HSA']['count']}")
+    # Optionally print for debug
+    print("Detected Apnea/Hypopnea Events:")
+    for start, end, typ in self.detected_events:
+        print(f"{typ} from {start:.1f}s to {end:.1f}s (duration: {end-start:.1f}s)")
+
+def detect_apnea_events(self):
+    # ...existing code...
+    for start, end, typ in self.detected_events:
+        print(f"{typ} from {start:.1f}s to {end:.1f}s (duration: {end-start:.1f}s)")
+
     # Update left panel event count label
     self.update_left_event_count_label()
 
@@ -774,8 +938,7 @@ def update_left_event_count_label(self):
         f"<b>Event Counts:</b><br>"
         f"HSA: {hsa_count}<br>CSA: {csa_count}<br>OSA: {osa_count}"
     )
-
-
+    
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = SleepSensePlot()
