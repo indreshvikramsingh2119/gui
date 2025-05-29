@@ -42,7 +42,7 @@ class SleepSensePlot(QMainWindow):
         self.scales = {'Pulse': 1.0, 'SpO2': 1.0, 'Airflow': 1.0}
         self.summary_signal = 'Pulse'
         self.visible_signals = {'Body Position': True, 'Pulse': True, 'SpO2': True, 'Airflow': True}
-
+ 
         self.init_ui()              # <-- call this before normalize_signals
         self.normalize_signals()    # <-- call this after init_ui
         self.start_file_watcher()
@@ -276,6 +276,18 @@ class SleepSensePlot(QMainWindow):
 
     def plot_signals(self):
         self.ax.clear()
+
+        # --- Calculate total event counts for full data ---
+        total_hsa = total_csa = total_osa = 0
+        if hasattr(self, "detected_events"):
+            for _, _, typ in self.detected_events:
+                if typ == "HSA":
+                    total_hsa += 1
+                elif typ == "CSA":
+                    total_csa += 1
+                elif typ == "OSA":
+                    total_osa += 1
+
         t0 = self.time.iloc[0]
         t1 = self.time.iloc[-1]
         mask = (self.time >= t0) & (self.time <= t1)
@@ -290,32 +302,28 @@ class SleepSensePlot(QMainWindow):
 
         # Plot Body Position images without distortion
         if self.visible_signals.get('Body Position', False):
-            body_pos_segment = self.body_pos[mask]
+            body_pos_segment = self.body_pos[mask].reset_index(drop=True)
             t_segment = t.reset_index(drop=True)
-            n_points = int(self.window_size * 100 / 60)
-            n_points = max(1, n_points)
-            indices = np.linspace(0, len(body_pos_segment) - 1, n_points, dtype=int) if len(body_pos_segment) > 0 else []
-            for i in indices:
-                pos = body_pos_segment.iloc[i]
-                img_file = {
-                    0: 'uparrow.jpg',
-                    1: 'left.png',
-                    2: 'right.png',
-                    3: 'down.png',
-                    5: 'sittingchair.png'
-                }.get(pos)
-                if img_file:
-                    try:
-                        img = mpimg.imread(img_file)
-                        img_width = 0.30
-                        img_height = 0.30
-                        y_bottom = offset['Body Position']
-                        extent = [t_segment.iloc[i], t_segment.iloc[i] + img_width, y_bottom, y_bottom + img_height]
-                        self.ax.imshow(img, aspect='auto', extent=extent)
-                    except FileNotFoundError:
-                        print(f"Image file '{img_file}' not found. Please check the path.")
+            y_base = offset['Body Position'] + 0.4  # vertical position for arrows
 
-        window_size = 10
+            # Map your values to arrows (adjust as needed)
+            arrow_map = {
+                1: '←',  # Left
+                2: '→',  # Right
+                3: '↑',  # Up
+                4: '↓',  # Down
+                5: '⏏',  # Sitting/Other
+            }
+            # Plot an arrow for every 50th data point
+            for i in range(0, len(body_pos_segment), 50):  # Step through every 50th point
+                pos = body_pos_segment.iloc[i]
+                arrow = arrow_map.get(pos, '?')
+                self.ax.text(
+                    t_segment.iloc[i], y_base, arrow,
+                    fontsize=16, ha='center', va='center', color='purple', fontweight='bold', clip_on=True
+                )
+
+        window_size = 70
 
         if self.visible_signals.get('Pulse', False):
             pulse = self.pulse_n[mask] * self.scales['Pulse']
@@ -381,15 +389,29 @@ class SleepSensePlot(QMainWindow):
                 elif typ == "OSA":
                     osa_count += 1
 
-        stats_text = f"HSA: {hsa_count}\nCSA: {csa_count}\nOSA: {osa_count}"
-        # Always create the stats box after clearing the axes
-        self._stats_box = self.ax.text(
-            0.01, 0.98, stats_text,
+        # stats_text = f"HSA: {hsa_count}\nCSA: {csa_count}\nOSA: {osa_count}"
+        # # Always create the stats box after clearing the axes
+        # self._stats_box = self.ax.text(
+        #     0.01, 0.98, stats_text,
+        #     transform=self.ax.transAxes,
+        #     fontsize=14,
+        #     verticalalignment='top',
+        #     horizontalalignment='left',
+        #     bbox=dict(boxstyle="round,pad=0.4", facecolor="#f7f7f7", edgecolor="gray", alpha=0.8)
+        # )
+
+        # --- Add total event counts box at the top left ---
+        total_stats_text = (
+            f"Total Events\n"
+            f"HSA: {total_hsa}  CSA: {total_csa}  OSA: {total_osa}"
+        )
+        self.ax.text(
+            0.01, 0.98, total_stats_text,
             transform=self.ax.transAxes,
-            fontsize=14,
+            fontsize=13,
             verticalalignment='top',
             horizontalalignment='left',
-            bbox=dict(boxstyle="round,pad=0.4", facecolor="#f7f7f7", edgecolor="gray", alpha=0.8)
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="#e6f7ff", edgecolor="#3399cc", alpha=0.8)
         )
 
         self.ax.set_xlim(t0, t1)
@@ -735,24 +757,23 @@ def detect_apnea_events(self):
     print("Detected Apnea/Hypopnea Events:")
     for start, end, typ in self.detected_events:
         print(f"{typ} from {start:.1f}s to {end:.1f}s (duration: {end-start:.1f}s)")
-    """
-    Uses block-based logic to detect CSA, OSA, HSA events.
-    """
-    results = self.calculate_event_counts()
-    self.detected_events = []
-    for typ in ['CSA', 'OSA', 'HSA']:
-        for start, end in results[typ]['windows']:
-            self.detected_events.append((start, end, typ))
-    # Print counts for all event types
-    print(f"Total CSA events in data: {results['CSA']['count']}")
-    print(f"Total OSA events in data: {results['OSA']['count']}")
-    print(f"Total HSA events in data: {results['HSA']['count']}")
-    # Optionally print for debug
-    print("Detected Apnea/Hypopnea Events:")
-    for start, end, typ in self.detected_events:
-        print(f"{typ} from {start:.1f}s to {end:.1f}s (duration: {end-start:.1f}s)")
+    # Update left panel event count label
+    self.update_left_event_count_label()
 
-
+def update_left_event_count_label(self):
+    hsa_count = csa_count = osa_count = 0
+    if hasattr(self, "detected_events"):
+        for _, _, typ in self.detected_events:
+            if typ == "HSA":
+                hsa_count += 1
+            elif typ == "CSA":
+                csa_count += 1
+            elif typ == "OSA":
+                osa_count += 1
+    self.left_event_count_label.setText(
+        f"<b>Event Counts:</b><br>"
+        f"HSA: {hsa_count}<br>CSA: {csa_count}<br>OSA: {osa_count}"
+    )
 
 
 if __name__ == "__main__":
